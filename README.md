@@ -67,10 +67,16 @@ const EMAIL_MODE = 'temp-mail';  // 临时邮箱模式
 1. 访问 https://windsurf.com/account/register
 2. 点击浏览器工具栏的**插件图标**
 3. 点击 **"开始注册"**
-4. 插件会显示生成的邮箱地址
-5. **手动打开** https://temp-mail.org 查看验证码
-6. 复制验证码粘贴到网页
+4. 插件会自动生成临时邮箱地址（显示在界面上）
+5. 前往任意临时邮箱网站，输入生成的邮箱地址查看邮件
+6. 复制收到的验证码
 7. 完成注册！
+
+> 💡 **临时邮箱服务推荐**：
+> - 支持多个临时邮箱服务商
+> - 插件会自动选择可用的服务
+> - 邮箱地址格式：`windsurf-xxxxx@tempr.email`
+> - 您也可以在主流搜索引擎搜索"临时邮箱"找到更多服务
 
 ---
 
@@ -111,7 +117,27 @@ const EMAIL_MODE = 'temp-mail';  // 临时邮箱模式
 
 #### 3️⃣ 部署后端服务
 
-参考原项目的后端部署说明，部署到 Vercel。
+> 📖 **详细部署教程**：[查看完整后端部署指南](./docs/BACKEND_DEPLOY.md)
+
+简要步骤：
+
+1. **创建 Supabase 数据库**
+   - 注册 Supabase 账号
+   - 创建新项目
+   - 执行 SQL 创建数据表
+   - 获取 API 密钥
+
+2. **部署到 Vercel**
+   - 准备 API 代码文件
+   - 使用 Vercel CLI 或 GitHub 集成部署
+   - 配置环境变量（Supabase 密钥、邮箱配置等）
+   - 获取部署域名
+
+3. **配置完成**
+   - 将 API 地址填入插件配置
+   - 测试接口是否正常
+
+👉 **[点击查看详细图文教程](./docs/BACKEND_DEPLOY.md)** - 包含每一步的详细说明和常见问题解决方案
 
 #### 4️⃣ 配置插件
 
@@ -164,10 +190,12 @@ windsurf-helper-opensource/
 <summary><b>Q: 临时邮箱模式下，验证码在哪里查看？</b></summary>
 
 A: 插件会显示生成的邮箱地址（如 `windsurf-xxx@tempr.email`），您需要：
-1. 复制邮箱地址
-2. 访问 https://temp-mail.org
-3. 在网站输入邮箱地址查看邮件
-4. 找到验证码并复制
+1. 复制生成的邮箱地址
+2. 在搜索引擎搜索"临时邮箱"找到相关服务
+3. 在临时邮箱服务网站输入邮箱地址
+4. 查看收到的邮件，复制验证码
+
+💡 提示：多数临时邮箱服务都支持直接粘贴邮箱地址查看邮件
 </details>
 
 <details>
@@ -272,9 +300,24 @@ Copyright (c) 2025 bjfwan
 
 ## 📞 联系方式
 
-- GitHub: [@bjfwan](https://github.com/bjfwan)
-- 项目地址: [windsurf-helper-opensource](https://github.com/bjfwan/windsurf-helper-opensource)
-- 问题反馈: [Issues](https://github.com/bjfwan/windsurf-helper-opensource/issues)
+- 📧 Email: 2632507193@qq.com
+- 🐙 GitHub: [@bjfwan](https://github.com/bjfwan)
+- 🔗 项目地址: [windsurf-helper-opensource](https://github.com/bjfwan/windsurf-helper-opensource)
+- 🐛 问题反馈: [Issues](https://github.com/bjfwan/windsurf-helper-opensource/issues)
+
+---
+
+## ☕ 赞助支持
+
+如果这个项目对您有帮助，欢迎请作者喝杯咖啡 ☕
+
+👉 **[查看赞助方式](./docs/SPONSOR.md)**
+
+您的支持是我持续维护和改进项目的动力！每一份打赏都会被用于：
+- 🔧 项目维护和更新
+- 📚 文档完善  
+- 🐛 Bug修复
+- ✨ 新功能开发
 
 ---
 
