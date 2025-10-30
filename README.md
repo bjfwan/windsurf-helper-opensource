@@ -117,44 +117,349 @@ const EMAIL_MODE = 'temp-mail';  // 临时邮箱模式
 
 #### 3️⃣ 部署后端服务
 
-> 📖 **详细部署教程**：[查看完整后端部署指南](./docs/BACKEND_DEPLOY.md)
+##### 3.1 创建 Supabase 数据库
 
-简要步骤：
+**步骤 1：注册并创建项目**
 
-1. **创建 Supabase 数据库**
-   - 注册 Supabase 账号
-   - 创建新项目
-   - 执行 SQL 创建数据表
-   - 获取 API 密钥
+1. 访问 [Supabase](https://supabase.com/) 并注册账号
+2. 点击 **"New Project"** 创建新项目
+3. 填写项目信息：
+   - Project Name: `windsurf-helper` (任意名称)
+   - Database Password: 设置一个强密码（请牢记）
+   - Region: 选择离您最近的地区
+4. 点击 **"Create new project"**，等待项目创建完成（约2分钟）
 
-2. **部署到 Vercel**
-   - 准备 API 代码文件
-   - 使用 Vercel CLI 或 GitHub 集成部署
-   - 配置环境变量（Supabase 密钥、邮箱配置等）
-   - 获取部署域名
+**步骤 2：创建数据表**
 
-3. **配置完成**
-   - 将 API 地址填入插件配置
-   - 测试接口是否正常
+1. 在项目页面，点击左侧 **"SQL Editor"**
+2. 点击 **"New query"**
+3. 复制以下 SQL 代码并执行：
 
-👉 **[点击查看详细图文教程](./docs/BACKEND_DEPLOY.md)** - 包含每一步的详细说明和常见问题解决方案
+```sql
+-- 创建账号表
+CREATE TABLE accounts (
+  id BIGSERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password TEXT,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  verified_at TIMESTAMPTZ,
+  error_message TEXT
+);
 
-#### 4️⃣ 配置插件
+-- 创建验证码日志表
+CREATE TABLE verification_logs (
+  id BIGSERIAL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  code TEXT NOT NULL,
+  subject TEXT,
+  received_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 创建索引以提高查询性能
+CREATE INDEX idx_verification_logs_session_email 
+ON verification_logs(session_id, email, received_at DESC);
+
+CREATE INDEX idx_verification_logs_received_at 
+ON verification_logs(received_at DESC);
+
+-- 为 accounts 表启用 RLS（行级安全）
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+
+-- 允许匿名插入和读取
+CREATE POLICY "允许匿名访问 accounts" ON accounts
+FOR ALL USING (true) WITH CHECK (true);
+
+-- 为 verification_logs 表启用 RLS
+ALTER TABLE verification_logs ENABLE ROW LEVEL SECURITY;
+
+-- 允许匿名插入和读取
+CREATE POLICY "允许匿名访问 verification_logs" ON verification_logs
+FOR ALL USING (true) WITH CHECK (true);
+```
+
+4. 点击 **"Run"** 执行 SQL
+5. 确认执行成功（应该显示 "Success. No rows returned"）
+
+**步骤 3：获取 API 密钥**
+
+1. 点击左侧 **"Project Settings"**（齿轮图标）
+2. 选择 **"API"** 标签
+3. 找到以下信息并保存：
+   - **Project URL**: `https://xxxxx.supabase.co`
+   - **anon public key**: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` (很长的字符串)
+
+##### 3.2 准备后端 API 代码
+
+在您的项目根目录创建 `api` 文件夹，然后创建以下文件：
+
+**文件 1: `api/package.json`**
+
+```json
+{
+  "name": "windsurf-helper-api",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "imap": "^0.8.19",
+    "mailparser": "^3.6.5"
+  }
+}
+```
+
+**文件 2: `api/get-verification-code.js`**
+
+```javascript
+import Imap from 'imap';
+import { simpleParser } from 'mailparser';
+
+export default async function handler(req, res) {
+  // 设置 CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { email, session_id } = req.query;
+
+  if (!email || !session_id) {
+    return res.status(400).json({ error: 'Missing email or session_id' });
+  }
+
+  try {
+    // 从环境变量获取配置
+    const imapConfig = {
+      user: process.env.QQ_EMAIL,
+      password: process.env.QQ_AUTH_CODE,
+      host: 'imap.qq.com',
+      port: 993,
+      tls: true,
+      tlsOptions: { rejectUnauthorized: false }
+    };
+
+    // 查找验证码邮件
+    const code = await searchVerificationEmail(imapConfig, email);
+
+    if (code) {
+      // 保存到 Supabase
+      await saveToSupabase(session_id, email, code);
+      
+      return res.status(200).json({ 
+        success: true, 
+        code,
+        email,
+        session_id
+      });
+    }
+
+    return res.status(404).json({ 
+      success: false, 
+      message: 'Verification code not found' 
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    return res.status(500).json({ 
+      error: error.message 
+    });
+  }
+}
+
+async function searchVerificationEmail(config, targetEmail) {
+  return new Promise((resolve, reject) => {
+    const imap = new Imap(config);
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', true, (err, box) => {
+        if (err) {
+          imap.end();
+          return reject(err);
+        }
+
+        // 搜索最近的邮件
+        imap.search([['TO', targetEmail], ['SINCE', new Date(Date.now() - 10 * 60 * 1000)]], (err, results) => {
+          if (err || !results || results.length === 0) {
+            imap.end();
+            return resolve(null);
+          }
+
+          const fetch = imap.fetch(results, { bodies: '' });
+          let found = false;
+
+          fetch.on('message', (msg) => {
+            msg.on('body', (stream) => {
+              simpleParser(stream, async (err, parsed) => {
+                if (err) return;
+
+                const text = parsed.text || '';
+                const match = text.match(/(\d{6})/);
+                
+                if (match && !found) {
+                  found = true;
+                  imap.end();
+                  resolve(match[1]);
+                }
+              });
+            });
+          });
+
+          fetch.once('end', () => {
+            if (!found) {
+              imap.end();
+              resolve(null);
+            }
+          });
+        });
+      });
+    });
+
+    imap.once('error', (err) => reject(err));
+    imap.connect();
+  });
+}
+
+async function saveToSupabase(sessionId, email, code) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_KEY;
+
+  await fetch(`${supabaseUrl}/rest/v1/verification_logs`, {
+    method: 'POST',
+    headers: {
+      'apikey': supabaseKey,
+      'Authorization': `Bearer ${supabaseKey}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      email: email,
+      code: code,
+      subject: 'Windsurf Verification Code'
+    })
+  });
+}
+```
+
+**文件 3: `api/vercel.json`**
+
+```json
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    }
+  ]
+}
+```
+
+##### 3.3 部署到 Vercel
+
+**方式一：使用 Vercel CLI（推荐）**
+
+1. 安装 Vercel CLI：
+```bash
+npm install -g vercel
+```
+
+2. 登录 Vercel：
+```bash
+vercel login
+```
+
+3. 在项目根目录部署：
+```bash
+cd api
+vercel
+```
+
+4. 按提示操作：
+   - Set up and deploy? **Y**
+   - Which scope? 选择您的账号
+   - Link to existing project? **N**
+   - Project name? `windsurf-helper-api`
+   - In which directory is your code located? `./`
+
+5. 配置环境变量：
+```bash
+vercel env add QQ_EMAIL
+# 输入您的 QQ 邮箱，如：your@qq.com
+
+vercel env add QQ_AUTH_CODE
+# 输入 QQ 邮箱授权码（在第2步获取）
+
+vercel env add SUPABASE_URL
+# 输入 Supabase Project URL
+
+vercel env add SUPABASE_KEY
+# 输入 Supabase anon key
+```
+
+6. 重新部署以应用环境变量：
+```bash
+vercel --prod
+```
+
+**方式二：使用 Vercel 网页部署**
+
+1. 访问 [Vercel](https://vercel.com/)，登录账号
+2. 点击 **"Add New"** → **"Project"**
+3. 导入您的 GitHub 仓库（需先推送到 GitHub）
+4. 配置项目：
+   - Framework Preset: **Other**
+   - Root Directory: `api`
+5. 添加环境变量（Settings → Environment Variables）：
+   - `QQ_EMAIL`: 您的 QQ 邮箱
+   - `QQ_AUTH_CODE`: QQ 邮箱授权码
+   - `SUPABASE_URL`: Supabase 项目 URL
+   - `SUPABASE_KEY`: Supabase anon key
+6. 点击 **"Deploy"**
+
+**部署完成后：**
+- 获取 API 地址：`https://your-project.vercel.app`
+- 测试接口：访问 `https://your-project.vercel.app/api/get-verification-code?email=test@example.com&session_id=test123`
+
+##### 3.4 配置插件
 
 编辑 `extension/email-config.js`：
 
 ```javascript
-const EMAIL_MODE = 'qq-imap';  // QQ邮箱模式
+const EMAIL_MODE = 'qq-imap';
 
 const QQ_IMAP_CONFIG = {
-  domain: 'yourdomain.com',
+  domain: 'yourdomain.com',           // 您的域名
   emailPrefix: 'windsurf',
-  apiBaseUrl: 'https://your-api.vercel.app',
-  apiKey: '',  // 可选
+  apiBaseUrl: 'https://your-project.vercel.app',  // Vercel 部署的 API 地址
+  apiKey: '',
   pollInterval: 5000,
   timeout: 120000
 };
 ```
+
+##### 3.5 测试部署
+
+1. 在浏览器中加载插件
+2. 访问 Windsurf 注册页面
+3. 点击"开始注册"
+4. 观察插件是否自动显示验证码
+5. 检查 Supabase 数据库中是否有数据记录
+
 
 ---
 
@@ -311,13 +616,66 @@ Copyright (c) 2025 bjfwan
 
 如果这个项目对您有帮助，欢迎请作者喝杯咖啡 ☕
 
-👉 **[查看赞助方式](./docs/SPONSOR.md)**
-
 您的支持是我持续维护和改进项目的动力！每一份打赏都会被用于：
 - 🔧 项目维护和更新
 - 📚 文档完善  
 - 🐛 Bug修复
 - ✨ 新功能开发
+- 💡 新特性开发和研究
+
+### 💰 打赏方式
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="./docs/sponsor/weixin.jpg" width="200" alt="微信打赏码"><br>
+      <b>微信打赏</b>
+    </td>
+    <td align="center">
+      <img src="./docs/sponsor/zhifubao.jpg" width="200" alt="支付宝打赏码"><br>
+      <b>支付宝打赏</b>
+    </td>
+  </tr>
+</table>
+
+### 🎁 打赏福利
+
+感谢每一位支持者！为了表达感谢：
+
+- 💝 **所有打赏者**：将获得作者的真诚感谢和优先技术支持
+- 🌟 **累计打赏 ¥50+**：可提出一个功能建议，优先排期开发
+- 👑 **累计打赏 ¥100+**：可获得一对一配置指导服务
+- 🏆 **累计打赏 ¥200+**：可获得定制化功能开发支持
+
+> 💡 打赏后请添加作者微信（见下方联系方式），备注"打赏+GitHub用户名"，以便提供对应服务
+
+### 📊 赞助使用透明化
+
+| 用途 | 占比 | 说明 |
+|------|------|------|
+| 🖥️ 服务器费用 | 30% | 域名、API服务等运营成本 |
+| 📚 学习提升 | 30% | 购买技术书籍、课程等 |
+| ⏰ 开发时间 | 30% | 补贴开发维护时间成本 |
+| ☕ 生活支持 | 10% | 咖啡、能量饮料等 |
+
+### 🙏 特别鸣谢
+
+感谢以下赞助者对本项目的支持（按时间顺序）：
+
+> 暂无赞助记录，期待您成为第一位支持者！
+
+---
+
+### 💬 其他支持方式
+
+除了资金支持，您还可以通过以下方式帮助项目：
+
+- ⭐ **Star 本项目** - 让更多人发现这个工具
+- 🐛 **提交 Bug 报告** - 帮助改进项目质量
+- 💡 **提出功能建议** - 让项目更加完善
+- 📖 **改进文档** - 帮助其他用户更好地使用
+- 🔧 **贡献代码** - 直接参与项目开发
+- 📣 **分享推广** - 在社交媒体上分享本项目
 
 ---
 
