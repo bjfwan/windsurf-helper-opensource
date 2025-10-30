@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "🚀 Windsurf 自动注册助手 (Serverless版)",
+  "version": "4.0.0",
+  "description": "Serverless版本 - 完全免费的云端API，零维护成本",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://windsurf.com/*",
+    "https://codeium.com/*",
+    "https://windsurf-helper.vercel.app/*",
+    "https://*.vercel.app/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://windsurf.com/account/register*"],
+      "js": ["content/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_title": "🚀 Windsurf 注册助手"
+  }
+}
