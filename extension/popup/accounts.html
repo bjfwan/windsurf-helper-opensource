@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>账号管理 - Windsurf助手</title>
+  <link rel="stylesheet" href="styles-modern.css">
+  <link rel="stylesheet" href="accounts.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <button id="back-btn" class="btn-icon" title="返回">←</button>
+      <h1>📋 账号管理</h1>
+      <button id="refresh-btn" class="btn-icon" title="刷新">⟳</button>
+    </div>
+    
+    <div class="toolbar">
+      <input 
+        type="text" 
+        id="search-input" 
+        class="search-input" 
+        placeholder="搜索邮箱或用户名..."
+      >
+      <button id="export-btn" class="btn btn-secondary">导出CSV</button>
+      <button id="clear-btn" class="btn btn-danger">清空本地</button>
+    </div>
+    
+    <div class="stats">
+      <div class="stat-item">
+        <span class="stat-label">总计:</span>
+        <span id="total-count" class="stat-value">0</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">已验证:</span>
+        <span id="verified-count" class="stat-value">0</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">待验证:</span>
+        <span id="pending-count" class="stat-value">0</span>
+      </div>
+    </div>
+    
+    <div id="accounts-list" class="accounts-list">
+      <!-- 账号列表动态生成 -->
+    </div>
+    
+    <div id="empty-state" class="empty-state hidden">
+      <div class="empty-icon">📭</div>
+      <p>暂无账号记录</p>
+      <button id="start-register-btn" class="btn btn-primary">开始注册</button>
+    </div>
+    
+    <div id="loading" class="loading hidden">
+      <div class="spinner"></div>
+      <p>加载中...</p>
+    </div>
+    
+    <!-- 调试面板 -->
+    <div id="debug-panel" style="position: fixed; bottom: 0; left: 0; right: 0; max-height: 300px; overflow-y: auto; background: #1f2937; border-top: 2px solid #10b981; padding: 10px; font-family: monospace; font-size: 11px; color: #10b981; display: none; z-index: 9999;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <strong>🐛 调试信息</strong>
+        <div>
+          <button id="test-api-btn" style="background: #3b82f6; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">测试API</button>
+          <button id="copy-debug-btn" style="background: #8b5cf6; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">📋 复制</button>
+          <button id="clear-debug-btn" style="background: #ef4444; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">清空</button>
+          <button id="toggle-debug" style="background: #374151; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px;">隐藏</button>
+        </div>
+      </div>
+      <div id="debug-logs" style="font-size: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;"></div>
+    </div>
+    <button id="show-debug" style="position: fixed; bottom: 10px; right: 10px; background: #10b981; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 5px; font-size: 12px; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.3);">🐛 调试</button>
+  </div>
+  
+  <script src="../utils/supabase-rest.js"></script>
+  <script src="../utils/db-manager.js"></script>
+  <script src="../config.js"></script>
+  <script src="../utils/api-client.js"></script>
+  <script src="accounts.js"></script>
+</body>
+</html>

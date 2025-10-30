@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📊 注册统计</title>
+  <link rel="stylesheet" href="styles-modern.css">
+  <style>
+    body {
+      width: 500px;
+      min-height: 400px;
+    }
+
+    .stats-container {
+      padding: 20px;
+    }
+
+    .stats-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .stats-header h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    .stats-header p {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .summary-card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      text-align: center;
+      transition: all var(--transition-normal);
+    }
+
+    .summary-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--glass-shadow-hover);
+      background: var(--glass-bg-dark);
+    }
+
+    .summary-card .icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+      filter: drop-shadow(0 0 8px currentColor);
+    }
+
+    .summary-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: var(--text-primary);
+    }
+
+    .summary-card .label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .chart-section {
+      background: var(--glass-bg);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      margin-bottom: 20px;
+    }
+
+    .chart-section h3 {
+      font-size: 16px;
+      margin-bottom: 16px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .failure-reasons {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .reason-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px;
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--glass-border);
+    }
+
+    .reason-bar {
+      flex: 1;
+      height: 8px;
+      background: var(--bg-secondary);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .reason-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--danger-color), var(--warning-color));
+      border-radius: 4px;
+      transition: width var(--transition-slow);
+    }
+
+    .reason-label {
+      font-size: 12px;
+      min-width: 120px;
+      color: var(--text-secondary);
+    }
+
+    .reason-count {
+      font-size: 13px;
+      font-weight: 700;
+      min-width: 30px;
+      text-align: right;
+      color: var(--text-primary);
+    }
+
+    .weekly-chart {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      height: 120px;
+      margin-top: 12px;
+    }
+
+    .day-bar {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .bar-container {
+      width: 100%;
+      height: 100px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .bar {
+      width: 100%;
+      background: linear-gradient(180deg, var(--success-color), var(--success-dark));
+      border-radius: 4px 4px 0 0;
+      transition: all var(--transition-normal);
+      cursor: pointer;
+      position: relative;
+    }
+
+    .bar.failed {
+      background: linear-gradient(180deg, var(--danger-color), var(--danger-dark));
+    }
+
+    .bar:hover {
+      opacity: 0.8;
+      transform: scaleY(1.05);
+    }
+
+    .day-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .session-list {
+      max-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .session-item {
+      padding: 12px;
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--glass-border);
+      font-size: 12px;
+      transition: all var(--transition-fast);
+    }
+
+    .session-item:hover {
+      background: var(--glass-bg-dark);
+      transform: translateX(4px);
+      box-shadow: var(--glass-shadow);
+    }
+
+    .session-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .session-email {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-family: 'Monaco', monospace;
+    }
+
+    .session-status {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .session-status.success {
+      background: var(--success-color);
+      color: white;
+    }
+
+    .session-status.failed {
+      background: var(--danger-color);
+      color: white;
+    }
+
+    .session-time {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .no-data {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .no-data .icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="stats-container">
+    <div class="stats-header">
+      <h1>📊 注册统计分析</h1>
+      <p id="last-updated">最后更新: --</p>
+    </div>
+
+    <!-- 总体统计卡片 -->
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="icon">📈</div>
+        <div class="value" id="total-attempts">0</div>
+        <div class="label">总尝试次数</div>
+      </div>
+      
+      <div class="summary-card">
+        <div class="icon">✅</div>
+        <div class="value" id="success-count">0</div>
+        <div class="label">成功次数</div>
+      </div>
+      
+      <div class="summary-card">
+        <div class="icon">🎯</div>
+        <div class="value" id="success-rate">0%</div>
+        <div class="label">成功率</div>
+      </div>
+      
+      <div class="summary-card">
+        <div class="icon">⏱️</div>
+        <div class="value" id="avg-time">0s</div>
+        <div class="label">平均耗时</div>
+      </div>
+    </div>
+
+    <!-- 每周趋势 -->
+    <div class="chart-section">
+      <h3>📅 最近7天趋势</h3>
+      <div class="weekly-chart" id="weekly-chart">
+        <!-- 动态生成 -->
+      </div>
+    </div>
+
+    <!-- 失败原因分析 -->
+    <div class="chart-section" id="failure-section">
+      <h3>❌ 失败原因分析</h3>
+      <div class="failure-reasons" id="failure-reasons">
+        <!-- 动态生成 -->
+      </div>
+    </div>
+
+    <!-- 最近会话 -->
+    <div class="chart-section">
+      <h3>📝 最近会话 (最多10条)</h3>
+      <div class="session-list" id="session-list">
+        <!-- 动态生成 -->
+      </div>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="actions">
+      <button class="btn btn-secondary" id="refresh-btn">🔄 刷新数据</button>
+      <button class="btn btn-warning" id="export-btn">📥 导出数据</button>
+      <button class="btn btn-danger" id="reset-btn">🗑️ 重置统计</button>
+    </div>
+  </div>
+
+  <script src="../utils/analytics.js"></script>
+  <script src="stats.js"></script>
+</body>
+</html>

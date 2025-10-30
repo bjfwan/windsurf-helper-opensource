@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windsurf 注册助手</title>
+  <link rel="stylesheet" href="styles-modern.css">
+  <link rel="stylesheet" href="brain-panel.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 Windsurf 注册助手</h1>
+    
+    <div class="status">
+      <div id="status-indicator" class="indicator idle">●</div>
+      <span id="status-text">就绪</span>
+      <button id="brain-btn" class="brain-trigger-btn" title="打开超级智能大脑">🧠</button>
+    </div>
+    
+    <!-- 进度条 -->
+    <div class="progress-container hidden">
+      <div class="progress-bar-wrapper">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+      <div id="progress-text" class="progress-text">0%</div>
+    </div>
+    
+    <div class="controls">
+      <div class="control-row">
+        <button id="start-btn" class="btn btn-primary">开始注册</button>
+        <button id="stop-btn" class="btn btn-danger hidden">停止监听</button>
+      </div>
+      <div class="control-row">
+        <button id="reset-btn" class="btn btn-warning">重新开始</button>
+        <button id="accounts-btn" class="btn btn-secondary">查看账号</button>
+      </div>
+      <div class="control-row">
+        <button id="stats-btn" class="btn btn-secondary">📊 查看统计</button>
+      </div>
+    </div>    
+    <div id="current-account" class="account-info hidden">
+      <h3>当前账号</h3>
+      <div class="field">
+        <label>邮箱:</label>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="account-email" style="flex: 1; word-break: break-all;"></span>
+          <button id="copy-email-btn" class="btn-copy" title="复制邮箱">📋</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>密码:</label>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="account-password" style="flex: 1; word-break: break-all;"></span>
+          <button id="copy-password-btn" class="btn-copy" title="复制密码">📋</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>用户名:</label>
+        <span id="account-username"></span>
+      </div>
+      <div class="field">
+        <label>会话:</label>
+        <span id="account-session" style="font-family: 'Courier New', monospace; opacity: 0.9;"></span>
+      </div>
+    </div>
+    
+    <div id="logs" class="logs"></div>
+  </div>
+  
+  <!-- 超级智能大脑面板容器 -->
+  <div id="brain-container"></div>
+  
+  <script src="../utils/email-generator.js"></script>
+  <script src="../utils/supabase-rest.js"></script>
+  <script src="../utils/db-manager.js"></script>
+  <script src="../utils/state-machine.js"></script>
+  <script src="../utils/state-sync.js"></script>
+  <script src="../utils/analytics.js"></script>
+  <script src="../utils/smart-validator.js"></script>
+  <script src="../utils/super-brain.js"></script>
+  <script src="../config.js"></script>
+  <script src="../utils/api-client.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

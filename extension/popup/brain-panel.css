@@ -1,0 +1,314 @@
+/**
+ * 超级智能大脑 - 可视化面板样式
+ */
+
+.brain-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(229, 231, 235, 0.8);
+  z-index: 10000;
+  overflow-y: auto;
+  animation: brainSlideIn 0.3s ease-out;
+}
+
+@keyframes brainSlideIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -45%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+.brain-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.8);
+}
+
+.brain-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.brain-emoji {
+  font-size: 28px;
+  animation: brainPulse 2s ease-in-out infinite;
+}
+
+@keyframes brainPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.brain-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(243, 244, 246, 0.9);
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(229, 231, 235, 0.8);
+}
+
+.score-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.score-label {
+  font-size: 11px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.brain-overall {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(243, 244, 246, 0.6);
+  margin: 0 20px;
+  border-radius: 12px;
+  margin-top: 20px;
+  border: 1px solid rgba(229, 231, 235, 0.8);
+}
+
+.overall-emoji {
+  font-size: 32px;
+  animation: heartbeat 1.5s ease-in-out infinite;
+}
+
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.2); }
+  30% { transform: scale(1); }
+}
+
+.overall-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.brain-components {
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.component-item {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 10px;
+  border-left: 4px solid #e5e7eb;
+  border: 1px solid rgba(229, 231, 235, 0.8);
+  border-left: 4px solid #e5e7eb;
+}
+
+.component-item.status-healthy {
+  border-left-color: #059669;
+}
+
+.component-item.status-warning {
+  border-left-color: #d97706;
+}
+
+.component-item.status-error {
+  border-left-color: #dc2626;
+}
+
+.component-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.component-emoji {
+  font-size: 18px;
+}
+
+.component-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.component-details {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.detail-item {
+  padding: 2px 0;
+}
+
+.brain-recommendations {
+  padding: 0 20px 20px;
+}
+
+.recommendations-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 12px;
+}
+
+.recommendation-item {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(229, 231, 235, 0.8);
+  border-left: 4px solid #e5e7eb;
+}
+
+.recommendation-item.priority-high {
+  border-left-color: #dc2626;
+}
+
+.recommendation-item.priority-medium {
+  border-left-color: #d97706;
+}
+
+.recommendation-item.priority-low {
+  border-left-color: #059669;
+}
+
+.rec-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rec-emoji {
+  font-size: 16px;
+}
+
+.rec-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.rec-description {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 10px;
+}
+
+.rec-solutions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.solution-btn {
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.solution-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: linear-gradient(135deg, #4b5563 0%, #374151 100%);
+}
+
+.solution-btn:active {
+  transform: translateY(0);
+}
+
+.brain-actions {
+  padding: 20px;
+  display: flex;
+  gap: 10px;
+  border-top: 1px solid rgba(229, 231, 235, 0.8);
+}
+
+.brain-btn {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.brain-btn-primary {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+}
+
+.brain-btn-primary:hover {
+  background: linear-gradient(135deg, #4b5563 0%, #374151 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.brain-btn-secondary {
+  background: rgba(243, 244, 246, 0.9);
+  color: #111827;
+  border: 1px solid rgba(229, 231, 235, 0.8);
+}
+
+.brain-btn-secondary:hover {
+  background: rgba(229, 231, 235, 0.9);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.brain-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 滚动条样式 */
+.brain-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.brain-panel::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 10px;
+}
+
+.brain-panel::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 10px;
+}
+
+.brain-panel::-webkit-scrollbar-thumb:hover {
+  background: #374151;
+}
