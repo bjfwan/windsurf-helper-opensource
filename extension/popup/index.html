@@ -6,6 +6,7 @@
   <title>Windsurf 注册助手</title>
   <link rel="stylesheet" href="styles-modern.css">
   <link rel="stylesheet" href="brain-panel.css">
+  <link rel="stylesheet" href="sponsor.css">
 </head>
 <body>
   <div class="container">
@@ -36,6 +37,9 @@
       </div>
       <div class="control-row">
         <button id="stats-btn" class="btn btn-secondary">📊 查看统计</button>
+      </div>
+      <div class="control-row">
+        <button id="sponsor-btn" class="btn btn-sponsor">☕ 打赏支持</button>
       </div>
     </div>    
     <div id="current-account" class="account-info hidden">
@@ -70,6 +74,44 @@
   <!-- 超级智能大脑面板容器 -->
   <div id="brain-container"></div>
   
+  <!-- 打赏弹窗 -->
+  <div id="sponsor-modal" class="sponsor-modal hidden">
+    <div class="sponsor-content">
+      <div class="sponsor-header">
+        <h2>☕ 请作者喝杯咖啡</h2>
+        <p>感谢您的支持，这是我继续维护的动力！</p>
+      </div>
+      
+      <div class="sponsor-tabs">
+        <div class="sponsor-tab active" data-type="wechat">
+          💚 微信支付
+        </div>
+        <div class="sponsor-tab" data-type="alipay">
+          💙 支付宝
+        </div>
+      </div>
+      
+      <div class="sponsor-qrcode" id="sponsor-qrcode">
+        <div class="placeholder">
+          收款码加载中...
+        </div>
+      </div>
+      
+      <div class="sponsor-tips">
+        <p>🙏 您的每一份打赏都会被用于：</p>
+        <p>🔧 项目维护 • 📚 文档完善 • ✨ 新功能开发</p>
+      </div>
+      
+      <div class="sponsor-thank-you hidden" id="sponsor-thank">
+        ❤️ 感谢您的支持！
+      </div>
+      
+      <div class="sponsor-footer">
+        <button class="sponsor-close" id="sponsor-close">关闭</button>
+      </div>
+    </div>
+  </div>
+  
   <!-- 配置文件（最先加载） -->
   <script src="../email-config.js"></script>
   
@@ -85,6 +127,9 @@
   <script src="../utils/super-brain.js"></script>
   <script src="../config.js"></script>
   <script src="../utils/api-client.js"></script>
+  
+  <!-- 打赏功能 -->
+  <script src="sponsor.js"></script>
   
   <!-- 主逻辑 -->
   <script src="popup.js"></script>

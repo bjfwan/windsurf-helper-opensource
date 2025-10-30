@@ -219,7 +219,7 @@ async function checkAndRestoreState() {
   }
 }
 
-// 设置事件监听
+// 设置事件监听器
 function setupEventListeners() {
   document.getElementById('start-btn').addEventListener('click', startRegistration);
   document.getElementById('stop-btn').addEventListener('click', stopMonitoring);
@@ -238,6 +238,9 @@ function setupEventListeners() {
       copyToClipboard(currentAccount?.password, '密码');
     }
   });
+  
+  // 打赏按钮事件监听
+  document.getElementById('sponsor-btn').addEventListener('click', showSponsorModal);
 }
 
 // 开始注册

@@ -1,0 +1,180 @@
+/* 打赏按钮样式 */
+.btn-sponsor {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.btn-sponsor:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.btn-sponsor:active {
+  transform: translateY(0);
+}
+
+/* 打赏弹窗 */
+.sponsor-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sponsor-content {
+  background: white;
+  border-radius: 16px;
+  padding: 30px;
+  max-width: 400px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sponsor-header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.sponsor-header h2 {
+  font-size: 24px;
+  color: #333;
+  margin: 0 0 10px 0;
+}
+
+.sponsor-header p {
+  font-size: 14px;
+  color: #666;
+  margin: 0;
+}
+
+.sponsor-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.sponsor-tab {
+  flex: 1;
+  padding: 10px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: center;
+  font-weight: 600;
+}
+
+.sponsor-tab:hover {
+  border-color: #667eea;
+}
+
+.sponsor-tab.active {
+  border-color: #667eea;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.sponsor-qrcode {
+  text-align: center;
+  margin: 20px 0;
+}
+
+.sponsor-qrcode img {
+  max-width: 250px;
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.sponsor-qrcode .placeholder {
+  width: 250px;
+  height: 250px;
+  margin: 0 auto;
+  border: 2px dashed #ccc;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 14px;
+}
+
+.sponsor-tips {
+  text-align: center;
+  font-size: 13px;
+  color: #666;
+  margin: 15px 0;
+  line-height: 1.6;
+}
+
+.sponsor-footer {
+  text-align: center;
+  margin-top: 20px;
+}
+
+.sponsor-close {
+  background: #f0f0f0;
+  border: none;
+  padding: 10px 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  transition: all 0.3s ease;
+}
+
+.sponsor-close:hover {
+  background: #e0e0e0;
+}
+
+.sponsor-thank-you {
+  text-align: center;
+  color: #667eea;
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 15px;
+}
+
+.hidden {
+  display: none !important;
+}
