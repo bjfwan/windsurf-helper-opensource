@@ -7,6 +7,28 @@ let superBrain = null;
 let monitorCountdownHandle = null;
 let monitorDeadlineTs = 0;
 
+// 邮箱模式配置
+let emailConfig = null;
+let tempMailClient = null;
+
+// 尝试加载配置文件
+try {
+  if (typeof EMAIL_CONFIG !== 'undefined') {
+    emailConfig = EMAIL_CONFIG;
+    console.log('[模式] 配置已加载:', emailConfig.mode);
+    
+    // 如果是临时邮箱模式，初始化客户端
+    if (emailConfig.mode === 'temp-mail' && typeof TempMailClient !== 'undefined') {
+      tempMailClient = new TempMailClient(emailConfig.tempMail);
+      console.log('[临时邮箱] 客户端已初始化');
+    }
+  } else {
+    console.warn('[配置] 未找到 EMAIL_CONFIG，将使用默认配置');
+  }
+} catch (error) {
+  console.error('[配置] 加载失败:', error);
+}
+
 /**
  * 检测是否为Windsurf注册页面
  * 支持多种注册页面URL格式
@@ -355,10 +377,89 @@ async function startRegistration() {
       }
     });
   } else {
-    // 新建模式：通过background生成新账号
+    // 新建模式：根据配置选择账号生成方式
     stateMachine.transition(RegistrationStateMachine.STATES.DETECTING_PAGE);
     await stateMachine.saveToStorage();
     
+    // 检查是否使用临时邮箱模式
+    if (emailConfig && emailConfig.mode === 'temp-mail' && tempMailClient) {
+      // 临时邮箱模式：前端直接生成
+      log('🌍 使用临时邮箱模式生成账号...');
+      
+      try {
+        // 1. 生成临时邮箱
+        const emailResult = await tempMailClient.generateEmail();
+        log('✅ 临时邮箱已生成: ' + emailResult.email);
+        
+        // 2. 生成完整账号信息
+        const accountData = {
+          email: emailResult.email,
+          password: generatePassword(12),
+          username: generateUsername(),
+          session_id: 'session_' + Date.now() + '_' + generateRandomString(6),
+          tempMailToken: emailResult.token,
+          created_at: new Date().toISOString(),
+          status: 'pending'
+        };
+        
+        // 3. 保存当前账号
+        currentAccount = accountData;
+        
+        // 4. 显示账号信息
+        displayAccountInfo(accountData);
+        
+        // 5. 更新状态机
+        stateMachine.transition(RegistrationStateMachine.STATES.FILLING_STEP1, {
+          email: accountData.email,
+          password: accountData.password,
+          username: accountData.username,
+          session_id: accountData.session_id
+        });
+        await stateMachine.saveToStorage();
+        
+        // 6. 保存到本地数据库
+        try {
+          await dbManager.saveAccount(accountData);
+          log('💾 账号已保存到本地');
+        } catch (err) {
+          console.error('保存账号失败:', err);
+        }
+        
+        // 7. 通知content script填充表单
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'fillForm',
+          data: accountData
+        }, async (fillResponse) => {
+          if (chrome.runtime.lastError) {
+            log('❌ 填充失败: ' + chrome.runtime.lastError.message, 'error');
+            resetUI();
+            return;
+          }
+          
+          if (fillResponse && fillResponse.success) {
+            log('✅ 表单已填充');
+            log('📧 请访问 https://temp-mail.org 查看验证码', 'warning');
+            log('📧 邮箱地址: ' + accountData.email, 'warning');
+            
+            // 转换到等待验证状态
+            stateMachine.transition(RegistrationStateMachine.STATES.WAITING_VERIFICATION, {
+              email: accountData.email
+            });
+            await stateMachine.saveToStorage();
+          }
+        });
+        
+        return; // 退出函数，不执行后面的background调用
+        
+      } catch (error) {
+        log('❌ 临时邮箱生成失败: ' + error.message, 'error');
+        resetUI();
+        return;
+      }
+    }
+    
+    // 默认模式：通过background生成账号
+    log('🔒 使用后端API模式生成账号...');
     chrome.runtime.sendMessage({ action: 'startRegistration' }, async (response) => {
     // 检查runtime错误
     if (chrome.runtime.lastError) {

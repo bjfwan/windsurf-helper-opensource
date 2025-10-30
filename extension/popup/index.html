@@ -70,7 +70,12 @@
   <!-- 超级智能大脑面板容器 -->
   <div id="brain-container"></div>
   
+  <!-- 配置文件（最先加载） -->
+  <script src="../email-config.js"></script>
+  
+  <!-- 工具库 -->
   <script src="../utils/email-generator.js"></script>
+  <script src="../utils/temp-mail-client.js"></script>
   <script src="../utils/supabase-rest.js"></script>
   <script src="../utils/db-manager.js"></script>
   <script src="../utils/state-machine.js"></script>
@@ -80,6 +85,8 @@
   <script src="../utils/super-brain.js"></script>
   <script src="../config.js"></script>
   <script src="../utils/api-client.js"></script>
+  
+  <!-- 主逻辑 -->
   <script src="popup.js"></script>
 </body>
 </html>
