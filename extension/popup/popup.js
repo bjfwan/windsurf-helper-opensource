@@ -241,6 +241,9 @@ function setupEventListeners() {
   
   // 打赏按钮事件监听
   document.getElementById('sponsor-btn').addEventListener('click', showSponsorModal);
+  
+  // 设置打赏弹窗内部事件（关闭、切换支付方式等）
+  setupSponsorEvents();
 }
 
 // 开始注册
@@ -282,6 +285,12 @@ async function startRegistration() {
       log('🔄 继续未完成的注册流程: ' + currentAccount.email);
       // 不需要重新生成账号，使用现有账号
     } else {
+      // 重置状态机，确保从IDLE开始
+      if (stateMachine.getState() !== RegistrationStateMachine.STATES.IDLE) {
+        stateMachine.reset();
+        await stateMachine.clearStorage();
+      }
+      
       // 使用状态锁保护状态转换
       await stateSyncManager.executeWithLock(async () => {
         stateMachine.transition(RegistrationStateMachine.STATES.PREPARING);
@@ -434,21 +443,32 @@ async function startRegistration() {
           data: accountData
         }, async (fillResponse) => {
           if (chrome.runtime.lastError) {
-            log('❌ 填充失败: ' + chrome.runtime.lastError.message, 'error');
+            const errorMsg = chrome.runtime.lastError.message;
+            
+            // 友好的错误提示
+            if (errorMsg.includes('Receiving end does not exist')) {
+              log('❌ 页面未就绪，请刷新页面后重试', 'error');
+              log('💡 提示: 按 F5 刷新页面，然后重新点击"开始注册"', 'warning');
+            } else {
+              log('❌ 填充失败: ' + errorMsg, 'error');
+            }
+            
             resetUI();
             return;
           }
           
           if (fillResponse && fillResponse.success) {
             log('✅ 表单已填充');
-            log('📧 请访问 https://temp-mail.org 查看验证码', 'warning');
-            log('📧 邮箱地址: ' + accountData.email, 'warning');
+            log('🔄 启动临时邮箱验证码监听...');
             
             // 转换到等待验证状态
             stateMachine.transition(RegistrationStateMachine.STATES.WAITING_VERIFICATION, {
               email: accountData.email
             });
             await stateMachine.saveToStorage();
+            
+            // 启动临时邮箱验证码自动获取
+            startTempMailMonitoring(accountData.email);
           }
         });
         
@@ -580,7 +600,89 @@ async function triggerBackendMonitor(email, sessionId) {
   }
 }
 
-// 使用 Supabase Realtime 监听验证码
+/**
+ * 启动临时邮箱验证码监听
+ */
+async function startTempMailMonitoring(email) {
+  if (isMonitoring) {
+    log('⚠️ 已在监听验证码，请勿重复操作');
+    return;
+  }
+  
+  if (!tempMailClient) {
+    log('❌ 临时邮箱客户端未初始化', 'error');
+    return;
+  }
+  
+  isMonitoring = true;
+  log('📧 开始监听临时邮箱: ' + email);
+  log('⏳ 预计等待时间: 5分钟（最多60次检查，每5秒一次）');
+  
+  try {
+    // 使用 tempMailClient 自动获取验证码
+    const result = await tempMailClient.waitForVerificationCode();
+    
+    if (result.success && result.code) {
+      log(`🎉 自动获取到验证码: ${result.code}`, 'success');
+      displayVerificationCode(result.code);
+      
+      // 记录步骤完成
+      try {
+        await analytics.recordStepEnd('waiting_verification', true);
+      } catch (error) {
+        console.error('[Analytics] 记录步骤失败:', error);
+      }
+      
+      // 转换到完成状态
+      stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
+        verificationCode: result.code
+      });
+      
+      try {
+        await stateMachine.saveToStorage();
+      } catch (error) {
+        console.error('[临时邮箱] 保存状态失败:', error);
+      }
+      
+      // 更新账号状态
+      if (currentAccount) {
+        currentAccount.status = 'verified';
+        currentAccount.verification_code = result.code;
+        await dbManager.saveAccount(currentAccount);
+        log('✅ 账号状态已更新');
+      }
+      
+      stopRealtimeMonitoring();
+    } else {
+      log('⏱️ 验证码获取超时: ' + (result.error || '未知错误'), 'error');
+      log('💡 提示: 您可以手动访问临时邮箱网站查看', 'warning');
+      log('📧 邮箱地址: ' + email, 'warning');
+      
+      // 检查是否可以重试
+      if (stateMachine.canRetry()) {
+        stateMachine.transition(RegistrationStateMachine.STATES.RETRYING);
+        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
+        log('⏱️ 验证码超时，准备重试...');
+        setTimeout(() => {
+          startTempMailMonitoring(email);
+        }, 3000);
+      } else {
+        stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
+          error: '验证码获取超时'
+        });
+        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
+        log('⏱️ 验证码获取超时，已达最大重试次数', 'error');
+      }
+      
+      stopRealtimeMonitoring();
+    }
+  } catch (error) {
+    log('❌ 验证码监听失败: ' + error.message, 'error');
+    stopRealtimeMonitoring();
+  }
+}
+
+// 使用 Supabase Realtime 监听验证码（API模式）
 function startRealtimeMonitoring(email) {
   if (isMonitoring) {
     log('⚠️ 已在监听验证码，请勿重复操作');
@@ -726,6 +828,8 @@ function stopRealtimeMonitoring() {
 
 // 手动停止监听
 async function stopMonitoring() {
+  console.log('[stopMonitoring] 被调用, isMonitoring:', isMonitoring);
+  
   if (isMonitoring) {
     stopRealtimeMonitoring();
     
@@ -735,6 +839,9 @@ async function stopMonitoring() {
     
     updateStatus('idle', '已停止');
     log('⏹️ 用户手动停止监听');
+  } else {
+    console.log('[stopMonitoring] isMonitoring为false，无需停止');
+    log('⚠️ 当前没有正在进行的监听', 'warning');
   }
 }
 

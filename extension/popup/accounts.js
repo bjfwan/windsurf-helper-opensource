@@ -207,6 +207,8 @@ function setupEventListeners() {
       await checkVerificationCode(email);
     } else if (e.target.classList.contains('btn-delete')) {
       await deleteAccount(email);
+    } else if (e.target.classList.contains('view-mailbox-btn')) {
+      await viewMailbox(email);
     }
   });
 }
@@ -315,8 +317,9 @@ function renderAccounts() {
       <div class="account-actions">
         <button class="btn-small btn-copy-email" data-email="${account.email}">复制邮箱</button>
         <button class="btn-small btn-copy-password" data-email="${account.email}">复制密码</button>
-        <button class="btn-small btn-check-code" data-email="${account.email}">查询验证码</button>
-        <button class="btn-small btn-delete" data-email="${account.email}">删除</button>
+        <button class="btn btn-sm view-mailbox-btn" data-email="${account.email}" style="margin-right: 5px; background: #10b981;">查看邮箱</button>
+        <button class="btn btn-sm btn-check-code" data-email="${account.email}" style="margin-right: 5px;">查询验证码</button>
+        <button class="btn btn-sm btn-delete" data-email="${account.email}">删除</button>
       </div>
     </div>
   `}).join('');
@@ -396,6 +399,64 @@ async function copyPassword(email) {
   }
 }
 
+// 查看邮箱
+async function viewMailbox(email) {
+  console.log('[查看邮箱] 开始查看:', email);
+  
+  const account = allAccounts.find(a => a.email === email);
+  if (!account) {
+    alert('❌ 未找到账号信息');
+    return;
+  }
+  
+  // 检查是否为临时邮箱模式
+  if (typeof EMAIL_CONFIG === 'undefined' || EMAIL_CONFIG.mode !== 'temp-mail') {
+    alert('⚠️ 此功能仅适用于临时邮箱模式');
+    return;
+  }
+  
+  if (!account.tempMailToken) {
+    alert('❌ 此账号缺少邮箱令牌，无法查看邮箱');
+    return;
+  }
+  
+  try {
+    const tempMailClient = new TempMailClient(EMAIL_CONFIG.tempMail);
+    tempMailClient.currentEmail = account.email;
+    tempMailClient.currentToken = account.tempMailToken;
+    
+    console.log('[查看邮箱] 正在获取邮件列表...');
+    const mails = await tempMailClient.checkMails();
+    
+    console.log(`[查看邮箱] 收到 ${mails.length} 封邮件`);
+    
+    if (mails.length === 0) {
+      alert(`📭 邮箱为空\n\n邮箱地址: ${account.email}\n没有收到任何邮件`);
+      return;
+    }
+    
+    // 显示邮件列表
+    let mailInfo = `📧 邮箱: ${account.email}\n收到 ${mails.length} 封邮件:\n\n`;
+    
+    for (let i = 0; i < mails.length; i++) {
+      const mail = mails[i];
+      const from = mail.from || mail.mail_from || '未知';
+      const subject = mail.subject || mail.mail_subject || '无主题';
+      const date = mail.date || mail.mail_date || mail.mail_timestamp || '未知时间';
+      
+      mailInfo += `${i + 1}. 发件人: ${from}\n`;
+      mailInfo += `   主题: ${subject}\n`;
+      mailInfo += `   时间: ${date}\n\n`;
+    }
+    
+    alert(mailInfo);
+    
+  } catch (error) {
+    console.error('[查看邮箱] 失败:', error);
+    alert(`❌ 查看邮箱失败: ${error.message}`);
+  }
+}
+
 // 查询验证码
 async function checkVerificationCode(email) {
   console.log('[查询验证码] 开始查询:', email);
@@ -409,11 +470,80 @@ async function checkVerificationCode(email) {
 
     if (codeElement) {
       codeElement.textContent = '查询中...';
-      codeElement.style.color = '#6b7280';
+      codeElement.style.color = '#3b82f6';
     }
     if (btn) {
-      btn.disabled = true;
       btn.textContent = '获取中...';
+    }
+
+    // 检查是否为临时邮箱模式
+    if (typeof EMAIL_CONFIG !== 'undefined' && EMAIL_CONFIG.mode === 'temp-mail') {
+      console.log('[查询验证码] 临时邮箱模式 - 使用临时邮箱API获取');
+      
+      // 获取账号的tempMailToken
+      const account = allAccounts.find(a => a.email === email);
+      if (!account || !account.tempMailToken) {
+        console.error('[查询验证码] 临时邮箱模式需要 tempMailToken');
+        if (codeElement) {
+          codeElement.textContent = '缺少邮箱令牌';
+          codeElement.style.color = '#ef4444';
+        }
+        if (btn) {
+          btn.textContent = '查询验证码';
+        }
+        alert('此账号缺少临时邮箱令牌，无法查询验证码。\n\n请重新注册账号。');
+        return;
+      }
+      
+      // 使用TempMailClient获取验证码
+      try {
+        const tempMailClient = new TempMailClient(EMAIL_CONFIG.tempMail);
+        tempMailClient.currentEmail = account.email;
+        tempMailClient.currentToken = account.tempMailToken;
+        
+        console.log('[查询验证码] 开始轮询临时邮箱API...');
+        const result = await tempMailClient.waitForVerificationCode();
+        
+        if (result.success && result.code) {
+          console.log('[查询验证码] ✅ 获取到验证码:', result.code);
+          
+          // 更新显示
+          if (codeElement) {
+            codeElement.textContent = result.code;
+            codeElement.style.color = '#10b981';
+          }
+          if (btn) {
+            btn.textContent = '查询验证码';
+          }
+          
+          // 更新账号状态
+          account.verification_code = result.code;
+          account.status = 'verified';
+          await dbManager.saveAccount(account);
+          
+          return;
+        } else {
+          console.warn('[查询验证码] 未能获取验证码:', result.error);
+          if (codeElement) {
+            codeElement.textContent = '未收到验证码';
+            codeElement.style.color = '#f59e0b';
+          }
+          if (btn) {
+            btn.textContent = '查询验证码';
+          }
+          return;
+        }
+      } catch (error) {
+        console.error('[查询验证码] 临时邮箱API异常:', error);
+        if (codeElement) {
+          codeElement.textContent = '查询失败';
+          codeElement.style.color = '#ef4444';
+        }
+        if (btn) {
+          btn.textContent = '查询验证码';
+        }
+        return;
+      }
     }
 
     console.log('[查询验证码] 步骤1: 确保账号有 session_id');
@@ -818,64 +948,4 @@ document.getElementById('clear-debug-btn')?.addEventListener('click', () => {
   debugLogs = [];
   updateDebugPanel();
   showToast('✅ 调试日志已清空');
-});
-
-// 测试API
-document.getElementById('test-api-btn')?.addEventListener('click', async () => {
-  console.log('========== 开始API测试 ==========');
-  console.log('API配置:', JSON.stringify(API_CONFIG, null, 2));
-  
-  // 测试健康检查
-  console.log('\n1️⃣ 测试健康检查...');
-  try {
-    const healthResp = await fetch(`${API_CONFIG.BASE_URL}/api/health`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    console.log('健康检查状态:', healthResp.status, healthResp.statusText);
-    const healthData = await healthResp.text();
-    console.log('健康检查响应:', healthData);
-  } catch (err) {
-    console.error('健康检查失败:', err.message);
-  }
-  
-  // 测试start-monitor
-  console.log('\n2️⃣ 测试启动监控API...');
-  const testEmail = 'test@test.com';
-  const testSessionId = genUUID();
-  console.log('测试邮箱:', testEmail);
-  console.log('测试Session ID:', testSessionId);
-  
-  try {
-    const startResp = await fetch(`${API_CONFIG.BASE_URL}/api/start-monitor`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: testEmail,
-        session_id: testSessionId
-      })
-    });
-    console.log('启动监控状态:', startResp.status, startResp.statusText);
-    const startData = await startResp.text();
-    console.log('启动监控响应:', startData);
-  } catch (err) {
-    console.error('启动监控失败:', err.message);
-  }
-  
-  // 测试check-code
-  console.log('\n3️⃣ 测试查询验证码API...');
-  try {
-    const checkResp = await fetch(`${API_CONFIG.BASE_URL}/api/check-code/${testSessionId}`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    console.log('查询验证码状态:', checkResp.status, checkResp.statusText);
-    const checkData = await checkResp.text();
-    console.log('查询验证码响应:', checkData);
-  } catch (err) {
-    console.error('查询验证码失败:', err.message);
-  }
-  
-  console.log('\n========== API测试完成 ==========');
-  showToast('✅ API测试完成，查看调试日志');
 });

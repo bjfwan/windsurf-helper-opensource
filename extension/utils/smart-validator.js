@@ -25,6 +25,17 @@ class SmartValidator {
     
     console.log('[SmartValidator] 开始智能验证账号:', account.email);
     
+    // 验证账号数据完整性
+    const accountValidation = this.validateAccount(account);
+    if (!accountValidation.valid) {
+      return {
+        isValid: false,
+        realStatus: 'invalid',
+        reason: accountValidation.issues.join(', '),
+        needReset: true
+      };
+    }
+    
     // 多维度检测
     const checks = {
       supabaseStatus: await this.checkSupabaseStatus(account.email),

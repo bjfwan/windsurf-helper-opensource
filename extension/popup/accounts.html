@@ -24,6 +24,7 @@
       >
       <button id="export-btn" class="btn btn-secondary">导出CSV</button>
       <button id="clear-btn" class="btn btn-danger">清空本地</button>
+      <button id="view-mailbox-btn" class="btn btn-primary">查看邮箱</button>
     </div>
     
     <div class="stats">
@@ -61,7 +62,6 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
         <strong>🐛 调试信息</strong>
         <div>
-          <button id="test-api-btn" style="background: #3b82f6; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">测试API</button>
           <button id="copy-debug-btn" style="background: #8b5cf6; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">📋 复制</button>
           <button id="clear-debug-btn" style="background: #ef4444; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">清空</button>
           <button id="toggle-debug" style="background: #374151; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px;">隐藏</button>
@@ -74,6 +74,8 @@
   
   <script src="../utils/supabase-rest.js"></script>
   <script src="../utils/db-manager.js"></script>
+  <script src="../email-config.js"></script>
+  <script src="../utils/temp-mail-client.js"></script>
   <script src="../config.js"></script>
   <script src="../utils/api-client.js"></script>
   <script src="accounts.js"></script>

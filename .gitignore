@@ -1,25 +1,52 @@
 # 用户配置（不提交）
 extension/email-config.js
+extension/config.js
+
+# 备份文件
+*.backup.js
+*.bak
 
 # Node modules
 node_modules/
+package-lock.json
+yarn.lock
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-project
+*.sublime-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Logs
 *.log
+logs/
 
 # Extension package
 *.zip
+*.crx
+*.xpi
 
 # Environment
 .env
 .env.local
+.env.production
+
+# Build
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# API keys and secrets (额外保护)
+**/secrets.js
+**/keys.js
