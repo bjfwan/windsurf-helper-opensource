@@ -1,32 +1,69 @@
-# 📧 自建API模式配置指南
+# 📧 自有域名模式配置指南
 
-> ⚠️ 此模式需要自己部署后端服务，适合有技术基础的用户
+> 本指南覆盖**两种部署方式**——**本地 Node.js 后端**（推荐）与**云端 Vercel 部署**（可选）。
+> 二者共用相同的 Cloudflare Email Routing + QQ 邮箱 IMAP 链路，只是 API 服务的运行位置不同。
 
 ---
 
-## 📋 前置要求
+## 🚦 选哪种？
+
+| 维度 | 💻 本地 Node.js 后端（推荐） | ☁️ Vercel 云端部署 |
+|---|---|---|
+| **部署难度** | ⭐ 双击 `start-backend.bat` | ⭐⭐⭐ 需要 Vercel CLI / Git |
+| **运行机器** | 用户本机（localhost:3000） | Vercel 边缘节点 |
+| **持续在线** | 仅 popup + 后端进程同时打开时可用 | 24/7 在线 |
+| **数据存储** | `backend/accounts.json`（明文，已 .gitignore） | Supabase（可选，需另配） |
+| **额外依赖** | Node.js 18+ | Vercel CLI、可选 Supabase |
+| **适用场景** | 单机长期使用 | 多设备共享、跨网络访问 |
+
+**没有特殊需求时优先选本地后端**：开箱即用、隐私可控、零云费用。
+
+---
+
+## 📋 共同前置要求（两种方式都需要）
 
 | 项目 | 说明 | 费用 | 必需性 |
 |------|------|------|--------|
-| 🌐 域名 | 用于接收邮件（如 example.com） | ~$10/年 | 必需 |
-| ☁️ Cloudflare | 邮件路由服务 | 免费 | 必需 |
-| 📮 QQ邮箱 | 接收转发的验证码邮件 | 免费 | 必需 |
-| 🚀 Vercel | 部署后端API服务 | 免费 | 必需 |
-| 🗄️ Supabase | 数据库存储（可选） | 免费 | 可选 |
+| 🌐 域名 | 用于接收邮件（如 `example.com`） | ~$10/年 | 必需 |
+| ☁️ Cloudflare | Email Routing 转发到 QQ | 免费 | 必需 |
+| 📮 QQ邮箱 | 实际收件箱（IMAP + 授权码） | 免费 | 必需 |
+
+**仅 Vercel 模式额外需要**：
+
+| 项目 | 说明 | 费用 |
+|------|------|------|
+| 🚀 Vercel 账号 | 部署 serverless API | 免费额度 |
+| 🗄️ Supabase | 跨设备数据库（可选） | 免费额度 |
 
 ---
 
-## 📝 配置流程概览
+## 🅰 方式 A：本地 Node.js 后端（推荐 5 分钟搞定）
 
 ```
-1. 运行 setup 脚本（创建配置文件）
-   ↓
-2. 部署后端服务（Vercel + Cloudflare + QQ邮箱）
-   ↓
-3. 修改配置文件（填写API地址和域名）
-   ↓
-4. 加载插件使用
+1. 配置 Cloudflare Email Routing → 转发到 QQ 邮箱（见步骤 1）
+2. 开启 QQ 邮箱 IMAP 并获取授权码（见步骤 2）
+3. 双击 start-backend.bat（首次自动 npm install + 创建配置文件）
+4. 编辑 backend/backend-config.js 填入 QQ_EMAIL / QQ_AUTH_CODE / DOMAIN
+5. 重新运行 start-backend.bat 启动服务
+6. extension/config.js 中 BASE_URL 保持默认 http://localhost:3000
 ```
+
+✅ 完成后任何时候只要 `start-backend.bat` 运行中、popup 打开，注册流程即可工作。
+
+---
+
+## 🅱 方式 B：Vercel 云端部署（可选）
+
+```
+1. 配置 Cloudflare Email Routing → 转发到 QQ 邮箱（见步骤 1）
+2. 开启 QQ 邮箱 IMAP 并获取授权码（见步骤 2）
+3. （可选）创建 Supabase 项目用于跨设备账号同步（见步骤 3）
+4. 把 backend/ 代码部署到 Vercel（见步骤 4）
+5. extension/config.js 中 BASE_URL 改为 https://your-project.vercel.app
+```
+
+> 💡 下方"详细配置步骤"中的步骤 1-2 是两种方式的公共部分，步骤 3-4 仅 Vercel 模式需要。
+> 步骤 5 中"选项 A 本地" / "选项 B Vercel" 给出两种方式的具体填写示例。
 
 ---
 
@@ -184,27 +221,27 @@ vercel --prod
 
 ### 步骤5：配置插件
 
-#### 5.1 修改 `email-config.js`
+#### 5.1 修改 `extension/email-config.js`
 
 ```javascript
-const EMAIL_MODE = 'qq-imap';  // 改为 API 模式
+const EMAIL_MODE = 'qq-imap';  // 启用本地后端 / Vercel 模式
 
 const QQ_IMAP_CONFIG = {
   domain: 'yourdomain.com',      // 填写您的域名
-  emailPrefix: 'windsurf',
-  apiBaseUrl: '',
-  apiKey: '',
+  emailPrefix: 'windsurf',       // 生成 windsurf+xxx@yourdomain.com
   pollInterval: 5000,
   timeout: 120000
 };
 ```
 
-#### 5.2 修改 `config.js`
+#### 5.2 修改 `extension/config.js`
+
+**选项 A：本地后端（默认）**
 
 ```javascript
 const API_CONFIG = {
-  BASE_URL: 'https://your-project.vercel.app',  // Vercel API 地址
-  API_KEY: '',
+  BASE_URL: 'http://localhost:3000',   // 本地 Node 后端地址
+  API_KEY: '',                         // 本地后端不需要
   TIMEOUT: 10000,
   POLL_INTERVAL: 5000,
   ENDPOINTS: {
@@ -219,26 +256,66 @@ const API_CONFIG = {
 };
 ```
 
+同时编辑 `backend/backend-config.js`（从 `backend-config.example.js` 复制）：
+
+```javascript
+const BACKEND_CONFIG = {
+  PORT: 3000,
+  QQ_EMAIL: 'your-qq@qq.com',
+  QQ_AUTH_CODE: 'xxxxxxxxxxxxxxxx',
+  DOMAIN: 'yourdomain.com'
+};
+module.exports = { BACKEND_CONFIG };
+```
+
+**选项 B：Vercel 云端**
+
+```javascript
+const API_CONFIG = {
+  BASE_URL: 'https://your-project.vercel.app',  // 你的 Vercel 部署地址
+  API_KEY: '',
+  TIMEOUT: 10000,
+  POLL_INTERVAL: 5000,
+  ENDPOINTS: { /* 同上 */ }
+};
+```
+
+Vercel 环境变量 会代替本地 `backend-config.js` 提供凭证（见步骤 4.2）。
+
 ---
 
 ### 步骤6：测试
 
-1. 重新加载插件：`edge://extensions/` → 刷新
-2. 访问注册页面测试
-3. 点击插件 🧠 图标查看诊断报告
+**本地后端模式**：
+1. 运行 `start-backend.bat` 启动后端
+2. 访问 `http://localhost:3000/api/health` 确认返回 `{success:true}`
+3. 重新加载插件：`edge://extensions/` → 刷新
+4. 访问 Windsurf 注册页面测试
+5. 点击插件 🧠 图标查看诊断报告
+
+**Vercel 模式**：
+1. 访问 `https://your-project.vercel.app/api/health` 确认返回 `{success:true}`
+2. 重新加载插件：`edge://extensions/` → 刷新
+3. 访问 Windsurf 注册页面测试
 
 ---
 
 ## ❓ 常见问题
 
-**Q: 为什么需要自己部署？**  
+**Q: 为什么需要自己部署？**
 A: 完全开源，数据自控，不依赖他人服务器。
 
-**Q: 部署费用多少？**  
-A: Vercel免费，Supabase免费，Cloudflare免费，只需购买域名（~$10/年）。
+**Q: 本地后端与 Vercel 模式怎么选？**
+A: 单机使用选**本地后端**（零部署、零云费用）。需要多设备共享账号库、或希望 24/7 在线选 **Vercel**。
 
-**Q: 部署有多复杂？**  
-A: 有一定技术门槛，建议有基础的开发者使用。
+**Q: 部署费用多少？**
+A: 两种方式都是 ~$10/年（仅域名）。Vercel、Supabase、Cloudflare 都有充裕免费额度；本地后端运行在你机器上，完全免费。
+
+**Q: 本地后端多复杂？**
+A: Windows 双击 `start-backend.bat` 即可。首次会自动 `npm install`，其后只需保持进程运行。
+
+**Q: Vercel 部署多复杂？**
+A: 有一定技术门槛，建议熟悉 Git/Node 的开发者使用。
 
 ---
 

@@ -1,10 +1,14 @@
 # 用户配置（不提交）
 extension/email-config.js
 extension/config.js
+backend/backend-config.js
+backend/accounts.json
 
 # 备份文件
-*.backup.js
+*.backup
+*.backup.*
 *.bak
+*.orig
 
 # Node modules
 node_modules/

@@ -1,0 +1,17 @@
+{
+  "name": "windsurf-helper-backend",
+  "version": "1.0.0",
+  "description": "Windsurf 注册助手本地后端 - 通过 IMAP 从 QQ 邮箱获取验证码",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "imap": "^0.8.19",
+    "mailparser": "^3.6.5"
+  }
+}

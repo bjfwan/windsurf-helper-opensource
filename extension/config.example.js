@@ -11,8 +11,9 @@
 
 // ==================== API 配置 ====================
 const API_CONFIG = {
-  // 您部署在 Vercel 的API地址
-  BASE_URL: 'https://your-project.vercel.app',
+  // 本地后端地址（运行 backend/server.js 后默认监听 3000 端口）
+  // 如果部署到 Vercel，改为 'https://your-project.vercel.app'
+  BASE_URL: 'http://localhost:3000',
   
   // API密钥（可选，如果后端设置了的话）
   API_KEY: '',

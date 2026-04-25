@@ -1,6 +1,23 @@
 let allAccounts = [];
 let filteredAccounts = [];
 
+// HTML 转义工具，用于在 innerHTML 中安全插入用户生成内容
+// 决策理由：账号邮箱/用户名/密码均来自外部来源（API/IndexedDB），存在 XSS 风险
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// 用于 HTML 属性值（更严格，连同空白符和等号编码）
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
 // 生成UUID（v4）
 function genUUID() {
   let d = new Date().getTime();
@@ -77,70 +94,124 @@ async function triggerBackend(email, sessionId) {
 }
 
 // 调试面板
+// 决策理由：单一 console 劫持点，使用 DOM 节点替代 innerHTML 字符串拼接以防 XSS 与提升性能
 const debugPanel = {
   logs: [],
   maxLogs: 100,
+  _renderScheduled: false,
 
   init() {
     const showBtn = document.getElementById('show-debug');
     const toggleBtn = document.getElementById('toggle-debug');
     const panel = document.getElementById('debug-panel');
 
-    if (showBtn) {
+    if (showBtn && panel) {
       showBtn.addEventListener('click', () => {
         panel.style.display = 'block';
         showBtn.style.display = 'none';
       });
     }
 
-    if (toggleBtn) {
+    if (toggleBtn && panel) {
       toggleBtn.addEventListener('click', () => {
         panel.style.display = 'none';
-        showBtn.style.display = 'block';
+        if (showBtn) showBtn.style.display = 'block';
       });
     }
 
-    // 拦截 console.log
-    const originalLog = console.log;
+    // 复制日志
+    const copyBtn = document.getElementById('copy-debug-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => this.copyLogs());
+    }
+
+    // 清空日志
+    const clearBtn = document.getElementById('clear-debug-btn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        this.logs = [];
+        this.render();
+        showToast('✅ 调试日志已清空');
+      });
+    }
+
+    // 拦截 console（保留原始引用，避免与其他脚本互相覆盖）
+    const original = {
+      log: console.log.bind(console),
+      error: console.error.bind(console),
+      warn: console.warn.bind(console)
+    };
+    this._original = original;
+
     console.log = (...args) => {
-      originalLog.apply(console, args);
+      original.log(...args);
       this.addLog('LOG', args.join(' '));
     };
-
-    const originalError = console.error;
     console.error = (...args) => {
-      originalError.apply(console, args);
+      original.error(...args);
       this.addLog('ERROR', args.join(' '), '#ef4444');
     };
-
-    const originalWarn = console.warn;
     console.warn = (...args) => {
-      originalWarn.apply(console, args);
+      original.warn(...args);
       this.addLog('WARN', args.join(' '), '#f59e0b');
     };
   },
 
   addLog(level, message, color = '#10b981') {
     const timestamp = new Date().toLocaleTimeString();
-    const logEntry = { timestamp, level, message, color };
-    this.logs.push(logEntry);
-
+    this.logs.push({ timestamp, level, message: String(message), color });
     if (this.logs.length > this.maxLogs) {
       this.logs.shift();
     }
-
-    this.render();
+    // 决策理由：合并多次 addLog 在一个动画帧内统一渲染，避免高频日志拖慢主线程
+    if (!this._renderScheduled) {
+      this._renderScheduled = true;
+      requestAnimationFrame(() => {
+        this._renderScheduled = false;
+        this.render();
+      });
+    }
   },
 
   render() {
     const logsDiv = document.getElementById('debug-logs');
     if (!logsDiv) return;
-
-    logsDiv.innerHTML = this.logs.map(log =>
-      `<div style="color: ${log.color};">[${log.timestamp}] ${log.level}: ${log.message}</div>`
-    ).join('');
-
+    const fragment = document.createDocumentFragment();
+    for (const log of this.logs) {
+      const div = document.createElement('div');
+      div.style.color = log.color;
+      div.textContent = `[${log.timestamp}] ${log.level}: ${log.message}`;
+      fragment.appendChild(div);
+    }
+    logsDiv.replaceChildren(fragment);
     logsDiv.scrollTop = logsDiv.scrollHeight;
+  },
+
+  async copyLogs() {
+    const lines = this.logs.map(log => `[${log.timestamp}] ${log.level}: ${log.message}`);
+    const debugInfo = [
+      '=== Windsurf Helper 调试信息 ===',
+      `时间: ${new Date().toLocaleString()}`,
+      `API地址: ${typeof API_CONFIG !== 'undefined' ? API_CONFIG.BASE_URL : 'N/A'}`,
+      '',
+      '=== 配置信息 ===',
+      `轮询间隔: ${typeof API_CONFIG !== 'undefined' ? API_CONFIG.POLL_INTERVAL : 'N/A'}ms`,
+      `请求超时: ${typeof API_CONFIG !== 'undefined' ? API_CONFIG.TIMEOUT : 'N/A'}ms`,
+      '',
+      '=== 调试日志 ===',
+      ...lines,
+      '',
+      '=== 系统信息 ===',
+      `User Agent: ${navigator.userAgent}`,
+      `浏览器: ${navigator.vendor}`
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(debugInfo);
+      showToast('✅ 调试信息已复制到剪贴板');
+    } catch {
+      showToast('❌ 复制失败');
+    }
   }
 };
 
@@ -287,39 +358,42 @@ function renderAccounts() {
   emptyState.classList.add('hidden');
 
   // 决策理由：根据真实状态和验证码情况显示准确信息
+  // 所有用户输入字段使用 escapeHtml/escapeAttr 转义，防止 XSS
   listElement.innerHTML = filteredAccounts.map(account => {
     const hasCode = account.verification_code && account.verification_code !== '等待中...';
     const actualStatus = hasCode ? 'verified' : (account.status || 'pending');
     const sidShort = (account.session_id || '').slice(0, 8);
+    const safeEmail = escapeAttr(account.email);
+    const codeId = 'code-' + (account.email || '').replace(/[^a-zA-Z0-9]/g, '-');
 
     return `
-    <div class="account-card" data-email="${account.email}">
+    <div class="account-card" data-email="${safeEmail}">
       <div class="account-header">
-        <div class="account-email">${account.email}</div>
+        <div class="account-email">${escapeHtml(account.email)}</div>
         <span class="status-badge status-${actualStatus}">
           ${getStatusText(actualStatus)}
         </span>
       </div>
       <div class="account-details">
         <span class="account-label">密码:</span>
-        <span>${account.password || 'N/A'}</span>
+        <span>${escapeHtml(account.password || 'N/A')}</span>
         <span class="account-label">用户名:</span>
-        <span>${account.username || 'N/A'}</span>
+        <span>${escapeHtml(account.username || 'N/A')}</span>
         <span class="account-label">会话:</span>
-        <span>${sidShort || 'N/A'}</span>
+        <span>${escapeHtml(sidShort || 'N/A')}</span>
         <span class="account-label">验证码:</span>
-        <span id="code-${account.email.replace(/[@.]/g, '-')}" style="font-weight: bold; color: ${hasCode ? '#10b981' : '#6b7280'};">
-          ${account.verification_code || '等待中...'}
+        <span id="${escapeAttr(codeId)}" style="font-weight: bold; color: ${hasCode ? '#10b981' : '#6b7280'};">
+          ${escapeHtml(account.verification_code || '等待中...')}
         </span>
         <span class="account-label">创建时间:</span>
-        <span>${formatDate(account.created_at)}</span>
+        <span>${escapeHtml(formatDate(account.created_at))}</span>
       </div>
       <div class="account-actions">
-        <button class="btn-small btn-copy-email" data-email="${account.email}">复制邮箱</button>
-        <button class="btn-small btn-copy-password" data-email="${account.email}">复制密码</button>
-        <button class="btn btn-sm view-mailbox-btn" data-email="${account.email}" style="margin-right: 5px; background: #10b981;">查看邮箱</button>
-        <button class="btn btn-sm btn-check-code" data-email="${account.email}" style="margin-right: 5px;">查询验证码</button>
-        <button class="btn btn-sm btn-delete" data-email="${account.email}">删除</button>
+        <button class="btn-small btn-copy-email" data-email="${safeEmail}">复制邮箱</button>
+        <button class="btn-small btn-copy-password" data-email="${safeEmail}">复制密码</button>
+        <button class="btn btn-sm view-mailbox-btn" data-email="${safeEmail}" style="margin-right: 5px; background: #10b981;">查看邮箱</button>
+        <button class="btn btn-sm btn-check-code" data-email="${safeEmail}" style="margin-right: 5px;">查询验证码</button>
+        <button class="btn btn-sm btn-delete" data-email="${safeEmail}">删除</button>
       </div>
     </div>
   `}).join('');
@@ -405,18 +479,18 @@ async function viewMailbox(email) {
   
   const account = allAccounts.find(a => a.email === email);
   if (!account) {
-    alert('❌ 未找到账号信息');
+    await ui.alert('未找到账号信息', { title: '❌ 错误' });
     return;
   }
   
   // 检查是否为临时邮箱模式
   if (typeof EMAIL_CONFIG === 'undefined' || EMAIL_CONFIG.mode !== 'temp-mail') {
-    alert('⚠️ 此功能仅适用于临时邮箱模式');
+    await ui.alert('此功能仅适用于临时邮箱模式', { title: '⚠️ 提示' });
     return;
   }
   
   if (!account.tempMailToken) {
-    alert('❌ 此账号缺少邮箱令牌，无法查看邮箱');
+    await ui.alert('此账号缺少邮箱令牌，无法查看邮箱', { title: '❌ 错误' });
     return;
   }
   
@@ -431,7 +505,7 @@ async function viewMailbox(email) {
     console.log(`[查看邮箱] 收到 ${mails.length} 封邮件`);
     
     if (mails.length === 0) {
-      alert(`📭 邮箱为空\n\n邮箱地址: ${account.email}\n没有收到任何邮件`);
+      await ui.alert(`邮箱地址: ${account.email}\n没有收到任何邮件`, { title: '📤 邮箱为空' });
       return;
     }
     
@@ -449,24 +523,24 @@ async function viewMailbox(email) {
       mailInfo += `   时间: ${date}\n\n`;
     }
     
-    alert(mailInfo);
+    await ui.alert(mailInfo, { title: '📧 邮件列表' });
     
   } catch (error) {
     console.error('[查看邮箱] 失败:', error);
-    alert(`❌ 查看邮箱失败: ${error.message}`);
+    await ui.alert(error.message, { title: '❌ 查看邮箱失败' });
   }
 }
 
 // 查询验证码
 async function checkVerificationCode(email) {
-  console.log('[查询验证码] 开始查询:', email);
+  logger.debug('[查询验证码] 开始查询:', email);
 
   try {
-    const codeId = `code-${email.replace(/[@.]/g, '-')}`;
+    const codeId = 'code-' + (email || '').replace(/[^a-zA-Z0-9]/g, '-');
     const codeElement = document.getElementById(codeId);
     const btn = document.querySelector(`.btn-check-code[data-email="${email}"]`);
 
-    console.log('[查询验证码] 找到元素:', { codeElement: !!codeElement, btn: !!btn });
+    logger.debug('[查询验证码] 找到元素:', { codeElement: !!codeElement, btn: !!btn });
 
     if (codeElement) {
       codeElement.textContent = '查询中...';
@@ -478,12 +552,12 @@ async function checkVerificationCode(email) {
 
     // 检查是否为临时邮箱模式
     if (typeof EMAIL_CONFIG !== 'undefined' && EMAIL_CONFIG.mode === 'temp-mail') {
-      console.log('[查询验证码] 临时邮箱模式 - 使用临时邮箱API获取');
+      logger.debug('[查询验证码] 临时邮箱模式 - 使用临时邮箱API获取');
       
       // 获取账号的tempMailToken
       const account = allAccounts.find(a => a.email === email);
       if (!account || !account.tempMailToken) {
-        console.error('[查询验证码] 临时邮箱模式需要 tempMailToken');
+        logger.error('[查询验证码] 临时邮箱模式需要 tempMailToken');
         if (codeElement) {
           codeElement.textContent = '缺少邮箱令牌';
           codeElement.style.color = '#ef4444';
@@ -491,7 +565,7 @@ async function checkVerificationCode(email) {
         if (btn) {
           btn.textContent = '查询验证码';
         }
-        alert('此账号缺少临时邮箱令牌，无法查询验证码。\n\n请重新注册账号。');
+        await ui.alert('此账号缺少临时邮箱令牌，无法查询验证码。\n请重新注册账号。', { title: '⚠️ 提示' });
         return;
       }
       
@@ -501,11 +575,11 @@ async function checkVerificationCode(email) {
         tempMailClient.currentEmail = account.email;
         tempMailClient.currentToken = account.tempMailToken;
         
-        console.log('[查询验证码] 开始轮询临时邮箱API...');
+        logger.debug('[查询验证码] 开始轮询临时邮箱API...');
         const result = await tempMailClient.waitForVerificationCode();
         
         if (result.success && result.code) {
-          console.log('[查询验证码] ✅ 获取到验证码:', result.code);
+          logger.info('[查询验证码] ✅ 获取到验证码:', result.code);
           
           // 更新显示
           if (codeElement) {
@@ -523,7 +597,7 @@ async function checkVerificationCode(email) {
           
           return;
         } else {
-          console.warn('[查询验证码] 未能获取验证码:', result.error);
+          logger.warn('[查询验证码] 未能获取验证码:', result.error);
           if (codeElement) {
             codeElement.textContent = '未收到验证码';
             codeElement.style.color = '#f59e0b';
@@ -534,7 +608,7 @@ async function checkVerificationCode(email) {
           return;
         }
       } catch (error) {
-        console.error('[查询验证码] 临时邮箱API异常:', error);
+        logger.error('[查询验证码] 临时邮箱API异常:', error);
         if (codeElement) {
           codeElement.textContent = '查询失败';
           codeElement.style.color = '#ef4444';
@@ -546,16 +620,16 @@ async function checkVerificationCode(email) {
       }
     }
 
-    console.log('[查询验证码] 步骤1: 确保账号有 session_id');
+    logger.debug('[查询验证码] 步骤1: 确保账号有 session_id');
     const sessionId = await ensureSessionForAccount(email);
-    console.log('[查询验证码] session_id:', sessionId);
+    logger.debug('[查询验证码] session_id:', sessionId);
 
-    console.log('[查询验证码] 步骤2: 触发后端监控');
+    logger.debug('[查询验证码] 步骤2: 触发后端监控');
     const backendStarted = await triggerBackend(email, sessionId);
-    console.log('[查询验证码] 后端启动结果:', backendStarted);
+    logger.debug('[查询验证码] 后端启动结果:', backendStarted);
 
     if (!backendStarted) {
-      console.warn('[查询验证码] 后端启动失败');
+      logger.warn('[查询验证码] 后端启动失败');
       if (codeElement) {
         codeElement.textContent = '后端未启动';
         codeElement.style.color = '#f59e0b';
@@ -564,7 +638,7 @@ async function checkVerificationCode(email) {
       return;
     }
 
-    console.log('[查询验证码] 步骤3: 开始轮询查询验证码');
+    logger.debug('[查询验证码] 步骤3: 开始轮询查询验证码');
     const startTs = Date.now();
     const timeoutMs = 60000;
     let found = null;
@@ -573,7 +647,7 @@ async function checkVerificationCode(email) {
     while (Date.now() - startTs < timeoutMs) {
       attempts++;
       const elapsed = Math.round((Date.now() - startTs) / 1000);
-      console.log(`[查询验证码] 第 ${attempts} 次查询 (已用时 ${elapsed}s)`);
+      logger.debug(`[查询验证码] 第 ${attempts} 次查询 (已用时 ${elapsed}s)`);
 
       if (codeElement) {
         codeElement.textContent = `查询中(${elapsed}s)...`;
@@ -582,8 +656,8 @@ async function checkVerificationCode(email) {
       try {
         // Serverless版本：调用API查询（API会主动查邮箱）
         const apiUrl = `${API_CONFIG.BASE_URL}/api/check-code/${encodeURIComponent(sessionId)}`;
-        console.log('[查询验证码] 调用API:', apiUrl);
-        console.log('[查询验证码] 查询条件: session_id=' + sessionId + ', email=' + email);
+        logger.debug('[查询验证码] 调用API:', apiUrl);
+        logger.debug('[查询验证码] 查询条件: session_id=' + sessionId + ', email=' + email);
 
         const response = await fetch(apiUrl, {
           method: 'GET',
@@ -595,31 +669,31 @@ async function checkVerificationCode(email) {
           }
         });
 
-        console.log('[查询验证码] API响应状态:', response.status, response.ok);
+        logger.debug('[查询验证码] API响应状态:', response.status, response.ok);
 
         if (response.ok) {
           const data = await response.json();
-          console.log('[查询验证码] API返回:', data);
+          logger.debug('[查询验证码] API返回:', data);
 
           if (data && data.success && data.code) {
             found = data.code;
-            console.log('[查询验证码] ✅ 找到验证码:', found);
+            logger.info('[查询验证码] ✅ 找到验证码:', found);
             break;
           } else {
-            console.log('[查询验证码] API返回:', data.message || '暂无验证码');
+            logger.debug('[查询验证码] API返回:', data.message || '暂无验证码');
           }
         } else {
           const errorText = await response.text();
-          console.error('[查询验证码] API失败:', response.status, errorText);
+          logger.error('[查询验证码] API失败:', response.status, errorText);
         }
       } catch (fetchError) {
-        console.error('[查询验证码] API请求异常:', fetchError);
+        logger.error('[查询验证码] API请求异常:', fetchError);
       }
 
       await new Promise(r => setTimeout(r, 2000));
     }
 
-    console.log('[查询验证码] 轮询结束，总尝试次数:', attempts, '找到验证码:', !!found);
+    logger.debug('[查询验证码] 轮询结束，总尝试次数:', attempts, '找到验证码:', !!found);
 
     if (found) {
       const code = found;
@@ -683,7 +757,7 @@ async function checkVerificationCode(email) {
 
   } catch (error) {
     console.error('查询验证码失败:', error);
-    const codeElement = document.getElementById(`code-${email.replace(/[@.]/g, '-')}`);
+    const codeElement = document.getElementById('code-' + (email || '').replace(/[^a-zA-Z0-9]/g, '-'));
     if (codeElement) {
       codeElement.textContent = '查询失败';
       codeElement.style.color = '#ef4444';
@@ -700,9 +774,12 @@ async function checkVerificationCode(email) {
 
 // 删除账号
 async function deleteAccount(email) {
-  if (!confirm(`确定要删除账号 ${email} 吗？`)) {
-    return;
-  }
+  const ok = await ui.confirm(`确定要删除账号 ${email} 吗？`, {
+    title: '删除账号',
+    confirmText: '删除',
+    danger: true
+  });
+  if (!ok) return;
 
   try {
     // 决策理由：同时从Supabase、IndexedDB和Chrome Storage删除
@@ -790,9 +867,12 @@ function exportToCSV() {
 
 // 清空本地账号
 async function clearLocalAccounts() {
-  if (!confirm('确定要清空所有本地账号记录吗？此操作不可恢复！')) {
-    return;
-  }
+  const ok = await ui.confirm('确定要清空所有本地账号记录吗？此操作不可恢复！', {
+    title: '清空所有账号',
+    confirmText: '清空',
+    danger: true
+  });
+  if (!ok) return;
 
   try {
     // 清空IndexedDB
@@ -827,125 +907,14 @@ function showLoading(show) {
 }
 
 // 显示提示消息
+// 决策理由：统一走 ui.toast，根据 emoji 前缀自动选择 type，保持调用点向后兼容
 function showToast(message) {
-  // 简单的toast实现
-  const toast = document.createElement('div');
-  toast.textContent = message;
-  toast.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: rgba(16, 185, 129, 0.9);
-    color: white;
-    padding: 12px 20px;
-    border-radius: 8px;
-    font-size: 13px;
-    z-index: 10000;
-    animation: slideIn 0.3s ease;
-  `;
-
-  document.body.appendChild(toast);
-
-  setTimeout(() => {
-    toast.style.animation = 'slideOut 0.3s ease';
-    setTimeout(() => toast.remove(), 300);
-  }, 2000);
+  const m = String(message);
+  let type = 'info';
+  if (m.startsWith('✅') || m.startsWith('🎉')) type = 'success';
+  else if (m.startsWith('⚠️') || m.startsWith('⚠')) type = 'warning';
+  else if (m.startsWith('❌') || m.startsWith('🚫')) type = 'error';
+  ui.toast(m, type);
 }
 
-// CSS动画
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-  }
-  @keyframes slideOut {
-    from { transform: translateX(0); opacity: 1; }
-    to { transform: translateX(100%); opacity: 0; }
-  }
-`;
-document.head.appendChild(style);
-
-// ==================== 调试功能 ====================
-let debugLogs = [];
-
-// 劫持console.log记录所有日志
-const originalLog = console.log;
-const originalError = console.error;
-const originalWarn = console.warn;
-
-console.log = function(...args) {
-  const logEntry = `[${new Date().toLocaleTimeString()}] LOG: ${args.join(' ')}`;
-  debugLogs.push(logEntry);
-  updateDebugPanel();
-  originalLog.apply(console, args);
-};
-
-console.error = function(...args) {
-  const logEntry = `[${new Date().toLocaleTimeString()}] ERROR: ${args.join(' ')}`;
-  debugLogs.push(logEntry);
-  updateDebugPanel();
-  originalError.apply(console, args);
-};
-
-console.warn = function(...args) {
-  const logEntry = `[${new Date().toLocaleTimeString()}] WARN: ${args.join(' ')}`;
-  debugLogs.push(logEntry);
-  updateDebugPanel();
-  originalWarn.apply(console, args);
-};
-
-function updateDebugPanel() {
-  const debugLogsDiv = document.getElementById('debug-logs');
-  if (debugLogsDiv) {
-    // 只显示最近100条日志
-    const recentLogs = debugLogs.slice(-100);
-    debugLogsDiv.innerHTML = recentLogs.join('\n');
-    debugLogsDiv.scrollTop = debugLogsDiv.scrollHeight;
-  }
-}
-
-// 显示/隐藏调试面板
-document.getElementById('show-debug')?.addEventListener('click', () => {
-  document.getElementById('debug-panel').style.display = 'block';
-  document.getElementById('show-debug').style.display = 'none';
-});
-
-document.getElementById('toggle-debug')?.addEventListener('click', () => {
-  document.getElementById('debug-panel').style.display = 'none';
-  document.getElementById('show-debug').style.display = 'block';
-});
-
-// 复制调试日志
-document.getElementById('copy-debug-btn')?.addEventListener('click', async () => {
-  const debugInfo = `
-=== Windsurf Helper 调试信息 ===
-时间: ${new Date().toLocaleString()}
-API地址: ${API_CONFIG.BASE_URL}
-
-=== 配置信息 ===
-轮询间隔: ${API_CONFIG.POLL_INTERVAL}ms
-请求超时: ${API_CONFIG.TIMEOUT}ms
-
-=== 调试日志 ===
-${debugLogs.join('\n')}
-
-=== 系统信息 ===
-User Agent: ${navigator.userAgent}
-浏览器: ${navigator.vendor}
-  `.trim();
-
-  try {
-    await navigator.clipboard.writeText(debugInfo);
-    showToast('✅ 调试信息已复制到剪贴板');
-  } catch (err) {
-    showToast('❌ 复制失败');
-  }
-});
-
-// 清空调试日志
-document.getElementById('clear-debug-btn')?.addEventListener('click', () => {
-  debugLogs = [];
-  updateDebugPanel();
-  showToast('✅ 调试日志已清空');
-});
+// 决策理由：调试功能已统一由文件顶部的 debugPanel 对象管理（单一 console 劫持点 + DOM 安全渲染）

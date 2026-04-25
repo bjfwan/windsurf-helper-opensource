@@ -10,19 +10,19 @@
   ],
   "host_permissions": [
     "https://windsurf.com/*",
-    "https://codeium.com/*",
     "https://*.vercel.app/*",
-    "https://www.1secmail.com/*",
-    "https://api.guerrillamail.com/*",
-    "https://*.supabase.co/*"
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://windsurf.com/account/register*"],
-      "js": ["content/content-script.js"],
+      "matches": [
+        "https://windsurf.com/account/register*",
+        "https://windsurf.com/windsurf/signin*"
+      ],
+      "js": ["utils/logger.js", "content/content-script.js"],
       "run_at": "document_idle"
     }
   ],

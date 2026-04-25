@@ -3,7 +3,7 @@
  * 决策理由：添加状态持久化和恢复机制，支持中断恢复
  */
 
-importScripts('../config.js', '../utils/email-generator.js');
+importScripts('../utils/logger.js', '../email-config.js', '../config.js', '../utils/email-generator.js');
 
 console.log('[Background] Service worker initialized (v2.0)');
 

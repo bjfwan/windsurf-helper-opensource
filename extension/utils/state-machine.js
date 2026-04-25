@@ -80,7 +80,7 @@ class RegistrationStateMachine {
   transition(newState, metadata = {}) {
     // 验证转换是否合法
     if (!this.canTransitionTo(newState)) {
-      console.error(`[StateMachine] 非法状态转换: ${this.currentState} -> ${newState}`);
+      logger.error(`[StateMachine] 非法状态转换: ${this.currentState} -> ${newState}`);
       return false;
     }
 
@@ -102,7 +102,7 @@ class RegistrationStateMachine {
       this.retryCount = 0;
     }
 
-    console.log(`[StateMachine] 状态转换: ${this.previousState} -> ${this.currentState}`, metadata);
+    logger.debug(`[StateMachine] 状态转换: ${this.previousState} -> ${this.currentState}`, metadata);
     
     // 通知所有监听器
     this.notifyListeners(newState, this.previousState, metadata);
@@ -134,7 +134,7 @@ class RegistrationStateMachine {
     this.stateHistory = [];
     this.retryCount = 0;
     this.metadata = {};
-    console.log('[StateMachine] 状态机已重置');
+    logger.info('[StateMachine] 状态机已重置');
   }
 
   /**
@@ -159,7 +159,7 @@ class RegistrationStateMachine {
       try {
         listener(newState, oldState, metadata);
       } catch (error) {
-        console.error('[StateMachine] 监听器错误:', error);
+        logger.error('[StateMachine] 监听器错误:', error);
       }
     });
   }
@@ -193,10 +193,10 @@ class RegistrationStateMachine {
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ registrationState: stateData }, () => {
         if (chrome.runtime.lastError) {
-          console.error('[StateMachine] 保存状态失败:', chrome.runtime.lastError);
+          logger.error('[StateMachine] 保存状态失败:', chrome.runtime.lastError);
           reject(chrome.runtime.lastError);
         } else {
-          console.log('[StateMachine] 状态已保存', stateData);
+          logger.debug('[StateMachine] 状态已保存', stateData);
           resolve(true);
         }
       });
@@ -210,14 +210,14 @@ class RegistrationStateMachine {
     return new Promise((resolve, reject) => {
       chrome.storage.local.get(['registrationState'], (result) => {
         if (chrome.runtime.lastError) {
-          console.error('[StateMachine] 加载状态失败:', chrome.runtime.lastError);
+          logger.error('[StateMachine] 加载状态失败:', chrome.runtime.lastError);
           reject(chrome.runtime.lastError);
         } else if (result.registrationState) {
           this.currentState = result.registrationState.currentState;
           this.previousState = result.registrationState.previousState;
           this.retryCount = result.registrationState.retryCount || 0;
           this.metadata = result.registrationState.metadata || {};
-          console.log('[StateMachine] 状态已恢复', result.registrationState);
+          logger.debug('[StateMachine] 状态已恢复', result.registrationState);
           resolve(true);
         } else {
           resolve(false);
@@ -233,10 +233,10 @@ class RegistrationStateMachine {
     return new Promise((resolve, reject) => {
       chrome.storage.local.remove(['registrationState'], () => {
         if (chrome.runtime.lastError) {
-          console.error('[StateMachine] 清除状态失败:', chrome.runtime.lastError);
+          logger.error('[StateMachine] 清除状态失败:', chrome.runtime.lastError);
           reject(chrome.runtime.lastError);
         } else {
-          console.log('[StateMachine] 存储状态已清除');
+          logger.debug('[StateMachine] 存储状态已清除');
           resolve(true);
         }
       });

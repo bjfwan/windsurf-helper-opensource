@@ -30,7 +30,7 @@ class DBManager {
     // 决策理由：检查浏览器支持，避免隐私模式或旧浏览器崩溃
     if (!window.indexedDB) {
       const error = new Error('浏览器不支持 IndexedDB（可能处于隐私模式）');
-      console.error('❌', error.message);
+      logger.error('❌', error.message);
       return Promise.reject(error);
     }
     
@@ -38,13 +38,13 @@ class DBManager {
       const request = indexedDB.open(this.dbName, this.version);
       
       request.onerror = () => {
-        console.error('IndexedDB 打开失败:', request.error);
+        logger.error('IndexedDB 打开失败:', request.error);
         reject(request.error);
       };
       
       request.onsuccess = () => {
         this.db = request.result;
-        console.log('✅ IndexedDB 初始化成功');
+        logger.debug('✅ IndexedDB 初始化成功');
         resolve(this.db);
       };
       
@@ -60,13 +60,13 @@ class DBManager {
           accountStore.createIndex('status', 'status', { unique: false });
           accountStore.createIndex('created_at', 'created_at', { unique: false });
           accountStore.createIndex('session_id', 'session_id', { unique: false });
-          console.log('✅ 创建 accounts 存储');
+          logger.info('✅ 创建 accounts 存储');
         } else {
           // 为已有accounts添加缺失索引
           const store = tx.objectStore(this.stores.accounts);
           if (!Array.from(store.indexNames).includes('session_id')) {
             store.createIndex('session_id', 'session_id', { unique: false });
-            console.log('🔧 添加 accounts.session_id 索引');
+            logger.info('🔧 添加 accounts.session_id 索引');
           }
         }
         
@@ -79,12 +79,12 @@ class DBManager {
           logStore.createIndex('email', 'email', { unique: false });
           logStore.createIndex('received_at', 'received_at', { unique: false });
           logStore.createIndex('session_id', 'session_id', { unique: false });
-          console.log('✅ 创建 verification_logs 存储');
+          logger.info('✅ 创建 verification_logs 存储');
         } else {
           const store = tx.objectStore(this.stores.verificationLogs);
           if (!Array.from(store.indexNames).includes('session_id')) {
             store.createIndex('session_id', 'session_id', { unique: false });
-            console.log('🔧 添加 verification_logs.session_id 索引');
+            logger.info('🔧 添加 verification_logs.session_id 索引');
           }
         }
       };
@@ -338,7 +338,7 @@ class DBManager {
     
     return new Promise((resolve) => {
       transaction.oncomplete = () => {
-        console.log(`🗑️ 清理了 ${toDelete.length} 个过期账号`);
+        logger.info(`🗑️ 清理了 ${toDelete.length} 个过期账号`);
         resolve({ success: true, deleted: toDelete.length });
       };
     });
@@ -352,7 +352,7 @@ class DBManager {
     if (this.db) {
       this.db.close();
       this.db = null;
-      console.log('🔒 IndexedDB 连接已关闭');
+      logger.debug('🔒 IndexedDB 连接已关闭');
     }
   }
 }

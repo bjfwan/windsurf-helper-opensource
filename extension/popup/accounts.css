@@ -263,3 +263,66 @@ body {
 .accounts-list::-webkit-scrollbar-thumb:hover {
   background: #374151;
 }
+
+/* 调试面板（决策理由：从 accounts.html 抽离的内联样式） */
+.debug-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #1f2937;
+  border-top: 2px solid #10b981;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #10b981;
+  display: none;
+  z-index: 9999;
+}
+
+.debug-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.debug-panel-actions button {
+  border: none;
+  color: #ffffff;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  margin-right: 5px;
+  font-size: 11px;
+}
+
+.debug-panel-actions .btn-debug-copy { background: #8b5cf6; }
+.debug-panel-actions .btn-debug-clear { background: #ef4444; }
+.debug-panel-actions .btn-debug-toggle { background: #374151; margin-right: 0; }
+
+.debug-logs {
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.debug-show-btn {
+  position: fixed;
+  bottom: 10px;
+  right: 10px;
+  background: #10b981;
+  color: #ffffff;
+  border: none;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 5px;
+  font-size: 12px;
+  z-index: 1000;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.debug-show-btn:hover { filter: brightness(1.05); }

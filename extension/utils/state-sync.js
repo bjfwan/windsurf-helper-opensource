@@ -26,7 +26,7 @@ class StateSyncManager {
     // 启动心跳检测
     this.startHeartbeat();
     
-    console.log('[StateSync] 同步管理器已初始化');
+    logger.debug('[StateSync] 同步管理器已初始化');
   }
 
   /**
@@ -56,7 +56,7 @@ class StateSyncManager {
         if (currentLock && currentLock.holder === newLock.holder) {
           this.isLocked = true;
           this.lockHolder = newLock.holder;
-          console.log('[StateSync] ✅ 获取锁成功');
+          logger.debug('[StateSync] ✅ 获取锁成功');
           return true;
         }
       }
@@ -65,7 +65,7 @@ class StateSyncManager {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
-    console.warn('[StateSync] ⚠️ 获取锁超时');
+    logger.warn('[StateSync] ⚠️ 获取锁超时');
     return false;
   }
 
@@ -77,7 +77,7 @@ class StateSyncManager {
       await this.clearLockData();
       this.isLocked = false;
       this.lockHolder = null;
-      console.log('[StateSync] 🔓 释放锁成功');
+      logger.debug('[StateSync] 🔓 释放锁成功');
     }
   }
 
@@ -109,20 +109,25 @@ class StateSyncManager {
       ...stateData,
       syncTimestamp: Date.now()
     };
-    
+
     await new Promise((resolve, reject) => {
-      chrome.storage.local.set({ 
+      chrome.storage.local.set({
         registrationState: syncData,
         [this.syncKey]: Date.now()
       }, () => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
         } else {
-          console.log('[StateSync] 状态已同步到所有上下文');
+          logger.debug('[StateSync] 状态已同步到所有上下文');
           resolve();
         }
       });
     });
+
+    // 决策理由：若心跳已被空闲检查自动停止，写入新状态时需要重启
+    if (!this.heartbeatInterval) {
+      this.startHeartbeat();
+    }
   }
 
   /**
@@ -130,14 +135,14 @@ class StateSyncManager {
    * @param {Object} newState - 新状态
    */
   handleStateChange(newState) {
-    console.log('[StateSync] 检测到状态变化:', newState);
+    logger.debug('[StateSync] 检测到状态变化:', newState);
     
     // 通知所有监听器
     this.syncListeners.forEach(listener => {
       try {
         listener(newState);
       } catch (error) {
-        console.error('[StateSync] 监听器错误:', error);
+        logger.error('[StateSync] 监听器错误:', error);
       }
     });
   }
@@ -160,9 +165,11 @@ class StateSyncManager {
 
   /**
    * 启动心跳检测
+   * 决策理由：每次启动前先停止旧心跳，避免重复启动导致多个 setInterval 累计
    */
   startHeartbeat() {
-    // 每5秒检查一次状态一致性
+    this.stopHeartbeat();
+    // 每5秒检查一次状态一致性，仅在有活跃注册时持续运行
     this.heartbeatInterval = setInterval(async () => {
       await this.checkStateConsistency();
     }, 5000);
@@ -180,24 +187,29 @@ class StateSyncManager {
 
   /**
    * 检查状态一致性
+   * 决策理由：发现没有活跃注册时主动停止心跳，避免长时间空转
    */
   async checkStateConsistency() {
     try {
       const result = await new Promise((resolve) => {
         chrome.storage.local.get(['registrationState', this.syncKey], resolve);
       });
-      
+
       if (result.registrationState) {
         const lastSync = result[this.syncKey] || 0;
         const now = Date.now();
-        
+
         // 如果超过30秒没有同步，可能存在问题
         if (now - lastSync > 30000) {
-          console.warn('[StateSync] ⚠️ 状态长时间未同步，可能存在问题');
+          logger.warn('[StateSync] ⚠️ 状态长时间未同步，可能存在问题');
         }
+      } else {
+        // 没有活跃注册状态，停止心跳节约资源（用户重新开始时会重启）
+        logger.debug('[StateSync] 无活跃状态，自动停止心跳');
+        this.stopHeartbeat();
       }
     } catch (error) {
-      console.error('[StateSync] 一致性检查失败:', error);
+      logger.error('[StateSync] 一致性检查失败:', error);
     }
   }
 

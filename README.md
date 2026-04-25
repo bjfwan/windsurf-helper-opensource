@@ -20,13 +20,17 @@
 
 ## 🎯 两种使用模式
 
-| 特性 | 🌍 临时邮箱模式 | 📧 自建API模式 |
-|------|---------------|-------------|
-| **配置难度** | ⭐ 极简 | ⭐⭐⭐ 中等 |
-| **需要成本** | ✅ 免费 | ⚠️ 域名$10/年 |
-| **稳定性** | ⚠️ 依赖公共API | ✅ 自己域名稳定 |
+| 特性 | 🌍 临时邮箱模式 | 📧 本地后端模式（QQ 邮箱） |
+|------|---------------|-----------------------|
+| **配置难度** | ⭐ 极简 | ⭐⭐ 中等 |
+| **需要成本** | ✅ 免费 | ⚠️ 域名 ~$10/年 |
+| **运行环境** | 仅需浏览器 | 本地 Node.js + 浏览器 |
+| **稳定性** | ⚠️ 依赖公共 API | ✅ 自己域名稳定 |
 | **被封风险** | ⚠️ 可能被限制 | ✅ 基本不封 |
-| **适用场景** | 测试使用 | 生产环境 |
+| **数据存储** | 浏览器 IndexedDB | IndexedDB + 本地 JSON |
+| **适用场景** | 快速试用 | 长期使用 |
+
+> 💡 两种模式任选一，插件默认读取 `extension/email-config.js` 中的 `mode` 字段决定走哪条路径。临时邮箱模式无需后端；本地后端模式需同时启动 `backend/` 下的 Node 服务。
 
 ---
 
@@ -64,35 +68,73 @@ cd windsurf-helper-opensource
 
 ### 步骤4：配置邮箱服务
 
-#### 选项A：临时邮箱模式（推荐测试用）
+#### 选项 A：临时邮箱模式（最简，无需后端）
 
-⚠️ **注意**：需要自己找到并集成Windsurf接受的临时邮箱服务
+⚠️ **注意**：需要自己找到并集成 Windsurf 接受的临时邮箱服务，公共服务通常已被屏蔽。
+
+编辑 `extension/email-config.js`：
+
+```js
+const EMAIL_MODE = 'temp-mail';
+```
 
 **配置步骤**：参考 [临时邮箱配置指南](./docs/temp-mail-setup.md)
 
-**内置示例**（仅供参考，不保证可用）：
-- 1SecMail（可能被屏蔽）
-- Guerrilla Mail（不发送邮件）
+#### 选项 B：本地后端模式（推荐长期使用）
 
-#### 选项B：自建API模式（推荐生产用）
+通过 Cloudflare Email Routing 将自有域名邮箱转发到 QQ 邮箱，本地 Node.js 后端用 IMAP 拉取验证码。
 
-**前置要求**：域名、Cloudflare、QQ邮箱、Vercel
+**前置要求**：
 
-**配置步骤**：参考 [自建API配置指南](./docs/self-hosted-api.md)
+| 项目 | 用途 | 费用 |
+|---|---|---|
+| 🌐 自有域名 | 接收验证码邮件（如 `windsurf@yourdomain.com`） | ~$10/年 |
+| ☁️ Cloudflare | Email Routing 转发到 QQ 邮箱 | 免费 |
+| 📮 QQ 邮箱 | 实际收件箱（需开启 IMAP + 授权码） | 免费 |
+| 🖥️ Node.js 18+ | 运行本地后端服务 | 免费 |
 
-### 步骤5：开始使用
+编辑 `extension/email-config.js`：
+
+```js
+const EMAIL_MODE = 'qq-imap';
+```
+
+完整 IMAP / Cloudflare 配置见 [本地后端配置指南](./docs/self-hosted-api.md)。
+
+### 步骤 5：启动本地后端（仅"本地后端模式"需要）
+
+```bash
+# Windows：一键启动（首次会自动 npm install + 创建配置文件）
+start-backend.bat
+
+# Mac/Linux：
+cd backend
+npm install
+cp backend-config.example.js backend-config.js
+# 编辑 backend-config.js 填入 QQ_EMAIL / QQ_AUTH_CODE / DOMAIN
+node server.js
+```
+
+后端默认监听 `http://localhost:3000`，提供以下端点：
+- `GET  /api/health` — 健康检查
+- `POST /api/start-monitor` — 开始监控某个邮箱
+- `GET  /api/check-code/:sessionId` — 拉取验证码
+- `POST /api/accounts` / `GET /api/accounts` / `DELETE /api/accounts/:id` — 账号管理
+
+### 步骤 6：开始使用
 
 1. 访问 https://windsurf.com/account/register
 2. 点击插件图标
 3. 点击"开始注册"
-4. 等待自动完成
+4. 等待自动完成（临时邮箱模式 5 分钟内；本地后端模式 ~2 分钟）
 
 ---
 
 ## 📚 详细文档
 
 - 📖 [临时邮箱配置完整指南](./docs/temp-mail-setup.md)
-- 📖 [自建API配置完整指南](./docs/self-hosted-api.md)
+- 📖 [本地后端 / 云端部署配置指南](./docs/self-hosted-api.md)
+- 📐 [项目架构](./ARCHITECTURE.md) · 📝 [变更日志](./CHANGELOG.md)
 
 ---
 
@@ -142,31 +184,29 @@ const EMAIL_CONFIG = {
 };
 ```
 
-### 自建API模式配置示例
+### 本地后端模式配置示例
 
 编辑 `extension/email-config.js`：
 
 ```javascript
 // ==================== 选择模式 ====================
-const EMAIL_MODE = 'qq-imap';  // 自建API模式
+const EMAIL_MODE = 'qq-imap';  // 本地后端模式
 
-// ==================== QQ邮箱配置 ====================
+// ==================== 邮箱配置 ====================
 const QQ_IMAP_CONFIG = {
-  domain: 'yourdomain.com',      // 您的域名
-  emailPrefix: 'windsurf',       // 邮箱前缀
-  apiBaseUrl: '',                // 留空
-  apiKey: '',                    // 留空
+  domain: 'yourdomain.com',      // 您的域名（在 Cloudflare 转发到 QQ 邮箱）
+  emailPrefix: 'windsurf',       // 邮箱前缀，生成 windsurf+xxx@yourdomain.com
   pollInterval: 5000,            // 轮询间隔
-  timeout: 120000                // 超时时间：2分钟
+  timeout: 120000                // 超时时间：2 分钟
 };
 ```
 
-编辑 `extension/config.js`：
+编辑 `extension/config.js`（默认连本地后端）：
 
 ```javascript
 const API_CONFIG = {
-  BASE_URL: 'https://your-project.vercel.app',  // 您的Vercel API地址
-  API_KEY: '',                                   // 如果设置了密钥
+  BASE_URL: 'http://localhost:3000',  // 本地后端默认地址
+  API_KEY: '',                          // 本地后端不需要密钥
   TIMEOUT: 10000,
   POLL_INTERVAL: 5000,
   ENDPOINTS: {
@@ -181,24 +221,48 @@ const API_CONFIG = {
 };
 ```
 
+编辑 `backend/backend-config.js`（后端读取的 IMAP 凭证）：
+
+```javascript
+const BACKEND_CONFIG = {
+  PORT: 3000,                              // 必须与 上面的 BASE_URL 一致
+  QQ_EMAIL: 'your-qq@qq.com',              // 接收转发邮件的 QQ 邮箱
+  QQ_AUTH_CODE: 'xxxxxxxxxxxxxxxx',        // QQ 邮箱 IMAP 授权码（不是登录密码）
+  DOMAIN: 'yourdomain.com'                 // 与 email-config.js 中的 domain 一致
+};
+module.exports = { BACKEND_CONFIG };
+```
+
+> 💡 如果你偏好云端部署（Vercel + Supabase）而非本地后端，参考 [本地后端 / 云端部署配置指南](./docs/self-hosted-api.md) 中的 Vercel 部分，并将 `BASE_URL` 改为你的 Vercel 域名。
+
 ---
 
 ## 📁 项目结构
 
 ```
 windsurf-helper-opensource/
-├── setup.bat/setup.sh         # 一键配置脚本
-├── README.md                  # 项目说明
-├── docs/                      # 详细文档
-│   ├── temp-mail-setup.md    # 临时邮箱配置指南
-│   └── self-hosted-api.md    # 自建API配置指南
-└── extension/                 # 浏览器插件
+├── README.md                  # 项目说明（本文件）
+├── ARCHITECTURE.md            # 架构概览（开发者文档）
+├── CHANGELOG.md               # 变更日志
+├── .editorconfig              # 缩进 / EOL / 字符集一致性
+├── setup.bat / setup.sh       # 浏览器插件一键配置脚本
+├── start-backend.bat          # Windows 一键启动本地 Node 后端
+├── docs/                      # 详细配置教程
+│   ├── temp-mail-setup.md     # 临时邮箱配置指南
+│   └── self-hosted-api.md     # 本地后端 / 云端部署指南
+├── backend/                   # 本地 Node.js 后端（QQ 邮箱 IMAP 验证码拉取）
+│   ├── server.js              # Express 服务端入口
+│   ├── imap-client.js         # IMAP 客户端封装
+│   ├── backend-config.example.js  # 后端配置模板
+│   ├── accounts.json          # 账号本地存储（首次运行后生成）
+│   └── package.json           # express + cors + imap + mailparser
+└── extension/                 # 浏览器插件（MV3）
     ├── manifest.json          # 插件清单
-    ├── *.example.js          # 配置模板
-    ├── popup/                # 弹出界面
-    ├── content/              # 内容脚本
-    ├── background/           # 后台服务
-    └── utils/                # 工具库
+    ├── *.example.js           # 配置模板（config / email-config）
+    ├── popup/                 # 弹出界面（HTML + CSS + 脚本）
+    ├── content/               # 内容脚本（注入 windsurf.com）
+    ├── background/            # service worker
+    └── utils/                 # 工具库（logger / ui-toast / state-machine 等）
 ```
 
 ---
@@ -208,15 +272,16 @@ windsurf-helper-opensource/
 ### 核心功能
 - ✅ 自动生成账号信息
 - ✅ 自动填写注册表单
-- ✅ 自动获取验证码（5分钟内）
+- ✅ 自动获取验证码（5 分钟内）
 - ✅ 自动提交并完成注册
 
 ### 高级功能
-- 🎯 智能状态机管理
-- 💾 本地IndexedDB存储
-- 🔄 会话断点续传
-- 📊 账号管理面板
-- 🐛 调试诊断工具
+- 🎯 智能状态机管理 + 会话断点续传
+- 💾 本地 IndexedDB 存储（插件侧） + 本地 JSON（后端侧）
+- 📨 两种邮箱获码路径在代码中统一抽象（`handleVerificationCodeReceived`）
+- 📊 账号管理 + 注册成功率统计面板
+- 🔍 分级日志器，默认 `info` 级别静默，`Logger.setLevel('debug')` 一键详细
+- 🧠 内置超级智能大脑诊断面板，一键检查环境/后端/状态机
 
 ---
 
@@ -252,37 +317,38 @@ windsurf-helper-opensource/
 </details>
 
 <details>
-<summary><b>Q: 自建API模式需要多少费用？</b></summary>
+<summary><b>Q: 本地后端模式需要多少费用？</b></summary>
 
-**A:** 仅需域名费用（~$10/年），其他服务均免费。
+**A:** 仅需域名费用（~$10/年），其他都是本地/免费服务。
 
 **费用明细：**
-- 🌐 域名：~$10/年（必需）
-- ☁️ Cloudflare：免费
-- 🚀 Vercel：免费额度足够
-- 📮 QQ邮箱：免费
-- 🗄️ Supabase：免费额度足够
+- 🌐 自有域名：~$10/年（必需，用于接收验证码邮件）
+- ☁️ Cloudflare Email Routing：免费
+- 📮 QQ 邮箱 IMAP：免费（作为实际收件箱）
+- 💻 本地 Node.js 后端：免费（运行在自己机器）
+- 📁 本地 JSON 账号存储：免费（`backend/accounts.json`）
 
-**总计：** ~$10/年（仅域名费用）
+**总计：** ~$10/年（仅域名费用）。若选择云端部署可复用 Vercel + Supabase 免费额度，总费用仍为 ~$10/年。
 </details>
 
 <details>
 <summary><b>Q: 验证码如何自动获取？</b></summary>
 
-**A:** 根据模式不同，自动获取方式不同：
+**A:** 根据模式不同，自动获取路径不同：
 
 **临时邮箱模式：**
-1. 插件调用临时邮箱的公共API
-2. 每5秒轮询一次，最多60次（5分钟）
+1. 插件调用临时邮箱的公共 API（如 1SecMail / Guerrilla）
+2. 每 5 秒轮询一次，最多 60 次（5 分钟）
 3. 收到邮件后自动提取验证码
 4. 显示在插件界面中
 
-**自建API模式：**
-1. 插件调用您部署的Vercel API
-2. Vercel API通过IMAP连接QQ邮箱
-3. 查询转发到QQ邮箱的验证码邮件
-4. 提取验证码后返回给插件
-5. 同时保存到Supabase数据库（可选）
+**本地后端模式：**
+1. 插件生成邮箱 `windsurf+xxx@yourdomain.com` 并提交表单
+2. Cloudflare Email Routing 把邮件转发到你的 QQ 邮箱
+3. 插件调用 `http://localhost:3000/api/start-monitor` 告知后端开始监控
+4. 本地后端通过 IMAP 连接 QQ 邮箱拉取验证码邮件
+5. 插件每 5 秒轮询 `/api/check-code/:sessionId` 获取结果
+6. 账号同时保存到 IndexedDB（插件）+ `backend/accounts.json`（后端）
 </details>
 
 <details>
@@ -347,7 +413,7 @@ extension/config.js
    - 错误：`未收到验证码`
    - 解决：
      - 临时邮箱模式：确认邮箱服务可用
-     - 自建API模式：检查Vercel API和QQ邮箱配置
+     - 本地后端模式：确认 `start-backend.bat` 已运行且 `http://localhost:3000/api/health` 可访问；QQ 邮箱授权码未过期；Cloudflare 转发规则已生效
 </details>
 
 <details>
@@ -449,8 +515,49 @@ extension/config.js
 ### 查看调试日志
 右键插件图标 → 检查 → Console 标签
 
+### 调整日志详尽程度
+
+插件使用统一的分级日志器（`extension/utils/logger.js`），默认级别 `info`。在控制台执行：
+
+```js
+// 调试期间显示全部日志（包括 5s 轮询、状态转换、邮件检查等）
+Logger.setLevel('debug');
+
+// 只看警告与错误
+Logger.setLevel('warn');
+
+// 持久化到 chrome.storage（重新打开 popup 仍然生效）
+Logger.saveLevelToStorage('debug');
+```
+
+可用级别：`debug` / `info` / `warn` / `error` / `silent`。
+
+### 静态检查（无需安装依赖）
+
+修改代码后可在项目根目录用 PowerShell 跑一遍静态 lint：
+
+```powershell
+# JS 语法
+Get-ChildItem extension/utils/*.js, extension/popup/*.js, `
+              extension/background/*.js, extension/content/*.js |
+  ForEach-Object { node -c $_.FullName }
+
+# manifest.json 合法
+Get-Content extension/manifest.json -Raw | ConvertFrom-Json | Out-Null
+```
+
+完整脚本（含 HTML 引用解析、CSS 变量一致性、加载顺序）见 [`CHANGELOG.md`](./CHANGELOG.md)。
+
+### 架构与变更历史
+- 📐 项目架构：[`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- 📝 变更历史：[`CHANGELOG.md`](./CHANGELOG.md)
+
 ### 参与贡献
-欢迎提交 Bug、功能建议或 Pull Request
+欢迎提交 Bug、功能建议或 Pull Request。提交前请：
+1. 跑通上面的静态检查
+2. 遵循 `.editorconfig` 风格（2 空格缩进、LF 行尾）
+3. 用户面板提示用 `ui.toast` / `ui.alert` / `ui.confirm`，不要用原生 `alert/confirm`
+4. 高频路径用 `logger.debug`，里程碑用 `logger.info`
 
 ---
 

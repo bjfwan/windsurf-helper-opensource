@@ -12,14 +12,14 @@
   <div class="container">
     <h1>🚀 Windsurf 注册助手</h1>
     
-    <div class="status">
-      <div id="status-indicator" class="indicator idle">●</div>
+    <div class="status" role="status" aria-live="polite">
+      <div id="status-indicator" class="indicator idle" aria-hidden="true">●</div>
       <span id="status-text">就绪</span>
-      <button id="brain-btn" class="brain-trigger-btn" title="打开超级智能大脑">🧠</button>
+      <button id="brain-btn" class="brain-trigger-btn" title="打开超级智能大脑" aria-label="打开超级智能大脑诊断面板">🧠</button>
     </div>
     
     <!-- 进度条 -->
-    <div class="progress-container hidden">
+    <div class="progress-container hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <div class="progress-bar-wrapper">
         <div id="progress-bar" class="progress-bar"></div>
       </div>
@@ -112,13 +112,16 @@
     </div>
   </div>
   
-  <!-- 配置文件（最先加载） -->
+  <!-- 日志器（必须最先加载，提供全局 logger） -->
+  <script src="../utils/logger.js"></script>
+  <script src="../utils/ui-toast.js"></script>
+
+  <!-- 配置文件 -->
   <script src="../email-config.js"></script>
   
   <!-- 工具库 -->
   <script src="../utils/email-generator.js"></script>
   <script src="../utils/temp-mail-client.js"></script>
-  <script src="../utils/supabase-rest.js"></script>
   <script src="../utils/db-manager.js"></script>
   <script src="../utils/state-machine.js"></script>
   <script src="../utils/state-sync.js"></script>

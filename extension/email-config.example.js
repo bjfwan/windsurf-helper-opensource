@@ -8,10 +8,10 @@
  */
 
 // ==================== 选择模式 ====================
-// 'temp-mail': 临时邮箱模式（无需配置，开箱即用）
-// 'qq-imap': QQ邮箱模式（需要配置域名和邮箱）
+// 'temp-mail': 临时邮箱模式（无需后端，但需要找到 Windsurf 接受的临时邮箱服务）
+// 'qq-imap':   本地后端模式（推荐，配合 backend/ 目录下的本地后端使用）
 
-const EMAIL_MODE = 'temp-mail';  // 修改这里选择模式
+const EMAIL_MODE = 'qq-imap';  // 修改这里选择模式
 
 // ==================== 临时邮箱配置 ====================
 const TEMP_MAIL_CONFIG = {
@@ -34,17 +34,17 @@ const TEMP_MAIL_CONFIG = {
 
 // ==================== QQ邮箱配置 ====================
 const QQ_IMAP_CONFIG = {
-  // 您的域名（需要配置 Cloudflare Email Routing）
+  // 您的域名（需要配置 Cloudflare Email Routing 将 *@domain 转发到 QQ 邮箱）
   domain: 'example.com',  // 修改为您的域名
   
   // 邮箱前缀
   emailPrefix: 'windsurf',  // 生成的邮箱格式：windsurf-xxxxx@example.com
   
-  // 后端API地址（需要部署后端服务）
-  apiBaseUrl: 'https://your-api.vercel.app',  // 修改为您的API地址
+  // 本地后端地址（留空，由 config.js 中的 BASE_URL 统一控制）
+  apiBaseUrl: '',
   
   // API密钥（如果设置了的话）
-  apiKey: '',  // 可选，如果后端设置了API_SECRET_KEY
+  apiKey: '',
   
   // 轮询间隔（毫秒）
   pollInterval: 5000,  // 5秒检查一次

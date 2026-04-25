@@ -39,13 +39,13 @@ class TempMailClient {
           return await this.generateGuerrillaMail();
         case 'temp-mail-org':
           // 旧方法已废弃，回退到1secmail
-          console.warn('[TempMail] temp-mail-org已废弃，使用1secmail代替');
+          logger.warn('[TempMail] temp-mail-org已废弃，使用 1secmail 代替');
           return await this.generate1SecMail();
         default:
           throw new Error(`不支持的服务商: ${this.provider}`);
       }
     } catch (error) {
-      console.error('[TempMail] 生成邮箱失败:', error);
+      logger.error('[TempMail] 生成邮箱失败:', error);
       throw error;
     }
   }
@@ -56,37 +56,37 @@ class TempMailClient {
    */
   async generate1SecMail() {
     try {
-      console.log('[1SecMail] 正在生成邮箱...');
+      logger.debug('[1SecMail] 正在生成邮箱...');
       const response = await fetch('https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1');
-      
-      console.log('[1SecMail] API响应状态:', response.status, response.statusText);
-      
+
+      logger.debug('[1SecMail] API响应状态:', response.status, response.statusText);
+
       if (!response.ok) {
         throw new Error(`1SecMail API返回错误: ${response.status} ${response.statusText}`);
       }
-      
+
       const data = await response.json();
-      console.log('[1SecMail] API返回数据:', data);
-      
+      logger.debug('[1SecMail] API返回数据:', data);
+
       if (!data || !Array.isArray(data) || data.length === 0) {
         throw new Error('1SecMail API返回数据格式错误');
       }
-      
+
       this.currentEmail = data[0]; // 返回格式: ["abc123@1secmail.com"]
-      
+
       // 分割邮箱获取 login 和 domain
       const [login, domain] = this.currentEmail.split('@');
       this.currentToken = JSON.stringify({ login, domain });
-      
-      console.log('[1SecMail] ✅ 邮箱生成成功:', this.currentEmail);
-      
+
+      logger.info('[1SecMail] ✅ 邮箱生成成功:', this.currentEmail);
+
       return {
         email: this.currentEmail,
         token: this.currentToken
       };
     } catch (error) {
-      console.error('[1SecMail] 生成邮箱失败:', error);
-      console.error('[1SecMail] 错误详情:', error.message);
+      logger.error('[1SecMail] 生成邮箱失败:', error);
+      logger.error('[1SecMail] 错误详情:', error.message);
       throw new Error(`无法生成 1SecMail 邮箱: ${error.message}`);
     }
   }
@@ -132,7 +132,7 @@ class TempMailClient {
           return [];
       }
     } catch (error) {
-      console.error('[TempMail] 检查邮件失败:', error);
+      logger.error('[TempMail] 检查邮件失败:', error);
       return [];
     }
   }
@@ -162,26 +162,26 @@ class TempMailClient {
    * Guerrilla Mail - 检查邮件
    */
   async checkGuerrillaMail() {
-    console.log('[Guerrilla] 检查邮件...');
-    console.log('[Guerrilla] 邮箱:', this.currentEmail);
-    console.log('[Guerrilla] Token:', this.currentToken);
-    
+    logger.debug('[Guerrilla] 检查邮件...');
+    logger.debug('[Guerrilla] 邮箱:', this.currentEmail);
+    logger.debug('[Guerrilla] Token:', this.currentToken);
+
     const url = `https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token=${this.currentToken}`;
-    console.log('[Guerrilla] API请求:', url);
-    
+    logger.debug('[Guerrilla] API请求:', url);
+
     const response = await fetch(url);
-    
-    console.log('[Guerrilla] API响应状态:', response.status, response.statusText);
-    
+
+    logger.debug('[Guerrilla] API响应状态:', response.status, response.statusText);
+
     if (!response.ok) {
-      console.error('[Guerrilla] API请求失败');
+      logger.error('[Guerrilla] API请求失败');
       return [];
     }
-    
+
     const data = await response.json();
-    console.log('[Guerrilla] API返回数据:', JSON.stringify(data, null, 2));
-    console.log('[Guerrilla] 邮件数量:', data.list ? data.list.length : 0);
-    
+    logger.debug('[Guerrilla] API返回数据:', JSON.stringify(data, null, 2));
+    logger.debug('[Guerrilla] 邮件数量:', data.list ? data.list.length : 0);
+
     return data.list || [];
   }
 
@@ -228,11 +228,12 @@ class TempMailClient {
    */
   async waitForVerificationCode() {
     for (let i = 0; i < this.maxAttempts; i++) {
-      console.log(`[TempMail] 第 ${i + 1}/${this.maxAttempts} 次检查...`);
-      
+      // 高频调用（1 次/5s）→ debug，默认 LOG_LEVEL=info 下不震控制台
+      logger.debug(`[TempMail] 第 ${i + 1}/${this.maxAttempts} 次检查...`);
+
       const mails = await this.checkMails();
-      console.log(`[TempMail] 收到 ${mails.length} 封邮件`);
-      
+      logger.debug(`[TempMail] 收到 ${mails.length} 封邮件`);
+
       for (const mail of mails) {
         // 1SecMail需要额外获取邮件内容
         let mailContent = mail;
@@ -242,26 +243,26 @@ class TempMailClient {
             mailContent = fullMail;
           }
         }
-        
+
         const subject = mailContent.subject || mailContent.mail_subject || '';
         const body = mailContent.body || mailContent.textBody || mailContent.htmlBody || mailContent.mail_body || mailContent.mail_text || '';
         const from = mailContent.from || mailContent.mail_from || '';
-        
-        console.log(`[TempMail] 检查邮件:`);
-        console.log(`  From: ${from}`);
-        console.log(`  Subject: ${subject}`);
-        console.log(`  Body (前100字): ${body.substring(0, 100)}`);
-        
+
+        logger.debug(`[TempMail] 检查邮件:`);
+        logger.debug(`  From: ${from}`);
+        logger.debug(`  Subject: ${subject}`);
+        logger.debug(`  Body (前100字): ${body.substring(0, 100)}`);
+
         // 检查是否来自 Windsurf
-        if (from.toLowerCase().includes('windsurf') || 
+        if (from.toLowerCase().includes('windsurf') ||
             from.toLowerCase().includes('codeium') ||
             subject.toLowerCase().includes('windsurf') ||
             subject.toLowerCase().includes('verification')) {
-          
-          console.log(`[TempMail] ✅ 匹配到Windsurf邮件`);
+
+          logger.info(`[TempMail] ✅ 匹配到Windsurf邮件`);
           const code = this.extractVerificationCode(body);
           if (code) {
-            console.log(`[TempMail] ✅ 找到验证码: ${code}`);
+            logger.info(`[TempMail] ✅ 找到验证码: ${code}`);
             return {
               success: true,
               code: code,

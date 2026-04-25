@@ -17,7 +17,7 @@ class RegistrationAnalytics {
     if (!data) {
       await this.initializeAnalyticsData();
     }
-    console.log('[Analytics] 统计模块已初始化');
+    logger.debug('[Analytics] 统计模块已初始化');
   }
 
   /**
@@ -63,7 +63,7 @@ class RegistrationAnalytics {
     };
     
     await this.saveCurrentSession(session);
-    console.log('[Analytics] 📊 新会话已开始:', session.sessionId);
+    logger.debug('[Analytics] 📊 新会话已开始:', session.sessionId);
     return session;
   }
 
@@ -84,7 +84,7 @@ class RegistrationAnalytics {
     });
     
     await this.saveCurrentSession(session);
-    console.log('[Analytics] 📝 步骤开始:', stepName);
+    logger.debug('[Analytics] 📝 步骤开始:', stepName);
   }
 
   /**
@@ -103,7 +103,7 @@ class RegistrationAnalytics {
       step.success = success;
       
       await this.saveCurrentSession(session);
-      console.log('[Analytics] ✅ 步骤完成:', stepName, `(${step.duration}ms)`);
+      logger.debug('[Analytics] ✅ 步骤完成:', stepName, `(${step.duration}ms)`);
     }
   }
 
@@ -123,7 +123,7 @@ class RegistrationAnalytics {
     });
     
     await this.saveCurrentSession(session);
-    console.log('[Analytics] ❌ 错误记录:', errorType);
+    logger.debug('[Analytics] ❌ 错误记录:', errorType);
   }
 
   /**
@@ -147,7 +147,7 @@ class RegistrationAnalytics {
     // 清除当前会话
     await this.clearCurrentSession();
     
-    console.log('[Analytics] 🏁 会话结束:', status, `(总耗时: ${session.totalDuration}ms)`);
+    logger.info('[Analytics] 🏁 会话结束:', status, `(总耗时: ${session.totalDuration}ms)`);
     return session;
   }
 
@@ -423,7 +423,7 @@ class RegistrationAnalytics {
   async resetAllStats() {
     await this.initializeAnalyticsData();
     await this.clearCurrentSession();
-    console.log('[Analytics] 📊 统计数据已重置');
+    logger.info('[Analytics] 📊 统计数据已重置');
   }
 
   /**

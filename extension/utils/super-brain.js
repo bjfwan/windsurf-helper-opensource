@@ -142,6 +142,13 @@ class SuperBrain {
   async checkSupabase() {
     const result = { status: 'unknown', details: {} };
     
+    // 决策理由：扩展已迁移到 API 模式，无 Supabase 客户端时直接标记为不适用
+    if (!this.supabase || !this.supabase.url || !this.supabase.key) {
+      result.status = 'healthy';
+      result.details.mode = 'ℹ️ API 模式（无需直连 Supabase）';
+      return result;
+    }
+    
     try {
       // 决策理由：添加超时控制，避免网络问题导致无限等待
       const controller = new AbortController();
@@ -763,38 +770,45 @@ class SuperBrain {
     
     switch (action) {
       case 'installNative':
-        alert('请打开文件管理器，导航到 backend 文件夹，运行 install_native.bat');
+        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 install_native.bat', { title: '安装原生模块' });
         break;
-        
+
       case 'startProxy':
-        alert('请打开文件管理器，导航到 backend 文件夹，运行 启动代理.bat');
+        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 启动代理.bat', { title: '启动代理' });
         break;
-        
+
       case 'manual':
-        alert('请打开文件管理器，导航到 backend 文件夹，运行 启动监控.bat');
+        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 启动监控.bat', { title: '启动监控' });
         break;
-        
-      case 'reset':
-        if (confirm('确定要重置当前状态吗？')) {
+
+      case 'reset': {
+        const ok = await ui.confirm('确定要重置当前状态吗？', {
+          title: '重置状态',
+          confirmText: '重置',
+          danger: true
+        });
+        if (ok) {
           this.stateMachine.reset();
           await this.stateMachine.clearStorage();
-          alert('✅ 状态已重置');
-          location.reload();
+          ui.toast('状态已重置', 'success');
+          // 略作延迟，让 toast 可见后再刷新
+          setTimeout(() => location.reload(), 600);
         }
         break;
-        
+      }
+
       case 'checkNetwork':
         window.open(API_CONFIG.BASE_URL, '_blank');
         break;
-        
+
       case 'checkConfig':
-        alert('请检查 extension/config.js 中的 API_CONFIG 配置');
+        await ui.alert('请检查 extension/config.js 中的 API_CONFIG 配置', { title: '检查配置' });
         break;
-        
+
       case 'checkPermissions':
-        alert('请检查 extension/manifest.json 中的 host_permissions 是否包含 API 域名');
+        await ui.alert('请检查 extension/manifest.json 中的 host_permissions 是否包含 API 域名', { title: '检查权限' });
         break;
-        
+
       default:
         console.warn('未知操作:', action);
     }
@@ -804,31 +818,34 @@ class SuperBrain {
    * 测试云端API调用
    */
   async testAPICall() {
-    const result = confirm('测试云端API\n\n将调用 /api/start-monitor 接口\n邮箱: test@example.com\n会话ID: test-' + Date.now() + '\n\n点击确定开始测试');
-    
+    const testSession = 'test-' + Date.now();
+    const result = await ui.confirm(
+      `将调用 /api/start-monitor 接口\n邮箱: test@example.com\n会话 ID: ${testSession}\n\n点击确定开始测试`,
+      { title: '测试云端 API', confirmText: '开始测试' }
+    );
+
     if (!result) return;
-    
+
     try {
       console.log('[SuperBrain] 开始测试API调用');
       console.log('[SuperBrain] API_CONFIG:', API_CONFIG);
       console.log('[SuperBrain] apiClient:', typeof apiClient);
-      
+
       const testEmail = 'test@example.com';
-      const testSession = 'test-' + Date.now();
-      
+
       console.log('[SuperBrain] 调用 apiClient.startMonitor');
       const response = await apiClient.startMonitor(testEmail, testSession);
-      
+
       console.log('[SuperBrain] API响应:', response);
-      
+
       if (response.success) {
-        alert('✅ API调用成功！\n\n' + JSON.stringify(response, null, 2));
+        await ui.alert(JSON.stringify(response, null, 2), { title: '✅ API 调用成功' });
       } else {
-        alert('⚠️ API返回失败\n\n' + JSON.stringify(response, null, 2));
+        await ui.alert(JSON.stringify(response, null, 2), { title: '⚠️ API 返回失败' });
       }
     } catch (error) {
       console.error('[SuperBrain] API调用失败:', error);
-      alert('❌ API调用失败\n\n错误: ' + error.message + '\n\n查看控制台获取详细信息');
+      await ui.alert(`错误: ${error.message}\n\n查看控制台获取详细信息`, { title: '❌ API 调用失败' });
     }
   }
 }

@@ -79,6 +79,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateStatus('idle', '就绪');
 });
 
+// 决策理由：popup 关闭时显式清理定时器与心跳，避免资源泄漏（pagehide 比 beforeunload 更可靠）
+window.addEventListener('pagehide', () => {
+  try {
+    if (typeof stateSyncManager !== 'undefined' && stateSyncManager) {
+      stateSyncManager.destroy();
+    }
+    if (monitorCountdownHandle) {
+      clearInterval(monitorCountdownHandle);
+      monitorCountdownHandle = null;
+    }
+    if (realtimeChannel && typeof realtimeChannel.unsubscribe === 'function') {
+      realtimeChannel.unsubscribe();
+      realtimeChannel = null;
+    }
+    isMonitoring = false;
+  } catch {
+    // 静默：popup 卸载阶段尽力清理
+  }
+});
+
 // 初始化 Supabase
 async function initSupabase() {
   try {
@@ -608,73 +628,32 @@ async function startTempMailMonitoring(email) {
     log('⚠️ 已在监听验证码，请勿重复操作');
     return;
   }
-  
+
   if (!tempMailClient) {
     log('❌ 临时邮箱客户端未初始化', 'error');
     return;
   }
-  
+
   isMonitoring = true;
   log('📧 开始监听临时邮箱: ' + email);
   log('⏳ 预计等待时间: 5分钟（最多60次检查，每5秒一次）');
-  
+
   try {
-    // 使用 tempMailClient 自动获取验证码
+    // 使用 tempMailClient 自动获取验证码（内部已实现轮询）
     const result = await tempMailClient.waitForVerificationCode();
-    
+
     if (result.success && result.code) {
-      log(`🎉 自动获取到验证码: ${result.code}`, 'success');
-      displayVerificationCode(result.code);
-      
-      // 记录步骤完成
-      try {
-        await analytics.recordStepEnd('waiting_verification', true);
-      } catch (error) {
-        console.error('[Analytics] 记录步骤失败:', error);
-      }
-      
-      // 转换到完成状态
-      stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
-        verificationCode: result.code
-      });
-      
-      try {
-        await stateMachine.saveToStorage();
-      } catch (error) {
-        console.error('[临时邮箱] 保存状态失败:', error);
-      }
-      
-      // 更新账号状态
-      if (currentAccount) {
-        currentAccount.status = 'verified';
-        currentAccount.verification_code = result.code;
-        await dbManager.saveAccount(currentAccount);
-        log('✅ 账号状态已更新');
-      }
-      
+      // 复用统一成功处理：状态/统计/账号持久化
+      await handleVerificationCodeReceived(result.code, { sourceTag: '临时邮箱' });
       stopRealtimeMonitoring();
     } else {
       log('⏱️ 验证码获取超时: ' + (result.error || '未知错误'), 'error');
       log('💡 提示: 您可以手动访问临时邮箱网站查看', 'warning');
       log('📧 邮箱地址: ' + email, 'warning');
-      
-      // 检查是否可以重试
-      if (stateMachine.canRetry()) {
-        stateMachine.transition(RegistrationStateMachine.STATES.RETRYING);
-        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
-        log('⏱️ 验证码超时，准备重试...');
-        setTimeout(() => {
-          startTempMailMonitoring(email);
-        }, 3000);
-      } else {
-        stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
-          error: '验证码获取超时'
-        });
-        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
-        log('⏱️ 验证码获取超时，已达最大重试次数', 'error');
-      }
-      
+
       stopRealtimeMonitoring();
+      // 复用统一超时处理：决定重试 vs ERROR
+      handleVerificationTimeout(() => startTempMailMonitoring(email), '验证码获取超时');
     }
   } catch (error) {
     log('❌ 验证码监听失败: ' + error.message, 'error');
@@ -734,42 +713,19 @@ function startRealtimeMonitoring(email) {
     
     try {
       const response = await apiClient.checkCode(sessionId);
-      
+
       if (response.success && response.code) {
-        console.log('[轮询] 收到验证码:', response.code);
-        log(`🎉 收到验证码: ${response.code}`);
-        displayVerificationCode(response.code);
-        
-        // 📊 记录步骤完成
-        try {
-          await analytics.recordStepEnd('waiting_verification', true);
-        } catch (error) {
-          console.error('[Analytics] 记录步骤失败:', error);
-        }
-        
-        // 转换到完成状态
-        stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
-          verificationCode: response.code
+        logger.info('[轮询] 收到验证码:', response.code);
+        // 复用统一成功处理（API 模式需要同步云端状态）
+        await handleVerificationCodeReceived(response.code, {
+          sourceTag: '轮询',
+          updateCloud: true,
+          email
         });
-        
-        try {
-          await stateMachine.saveToStorage();
-        } catch (error) {
-          console.error('[轮询] 保存状态失败:', error);
-        }
-        
-        // 更新账号状态为verified
-        try {
-          await updateAccountStatus(email, 'verified', response.code);
-          log('✅ 账号状态已同步到云端');
-        } catch (error) {
-          console.error('[轮询] 更新账号状态失败:', error);
-        }
-        
         stopRealtimeMonitoring();
       }
     } catch (error) {
-      console.error('[轮询] 检查验证码失败:', error);
+      logger.error('[轮询] 检查验证码失败:', error);
     }
   };
   
@@ -780,28 +736,83 @@ function startRealtimeMonitoring(email) {
   
   log('✅ 验证码轮询已启动（每5秒检查一次）');
   
-  // 设置120秒超时
+  // 设置120秒超时（复用统一超时处理）
   setTimeout(() => {
     if (isMonitoring) {
       stopRealtimeMonitoring();
-      
-      // 检查是否可以重试
-      if (stateMachine.canRetry()) {
-        stateMachine.transition(RegistrationStateMachine.STATES.RETRYING);
-        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
-        log('⏱️ 验证码超时，准备重试...');
-        setTimeout(() => {
-          startRealtimeMonitoring(email);
-        }, 3000);
-      } else {
-        stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
-          error: '验证码监听超时'
-        });
-        stateMachine.saveToStorage().catch(err => console.error('保存状态失败:', err));
-        log('⏱️ 验证码监听超时，已达最大重试次数', 'error');
-      }
+      handleVerificationTimeout(() => startRealtimeMonitoring(email), '验证码监听超时');
     }
   }, 120000);
+}
+
+/**
+ * 收到验证码后的统一处理
+ * 决策理由：消除 startTempMailMonitoring 与 startRealtimeMonitoring 中的重复逻辑
+ * @param {string} code - 验证码
+ * @param {Object} options - { sourceTag?: string, updateCloud?: boolean, email?: string }
+ */
+async function handleVerificationCodeReceived(code, options = {}) {
+  const { sourceTag = '监控', updateCloud = false, email = null } = options;
+
+  log(`🎉 收到验证码: ${code}`, 'success');
+  displayVerificationCode(code);
+
+  // 统计：记录步骤完成
+  try {
+    await analytics.recordStepEnd('waiting_verification', true);
+  } catch (error) {
+    logger.error('[Analytics] 记录步骤失败:', error);
+  }
+
+  // 状态机转换到完成
+  stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
+    verificationCode: code
+  });
+  try {
+    await stateMachine.saveToStorage();
+  } catch (error) {
+    logger.error(`[${sourceTag}] 保存状态失败:`, error);
+  }
+
+  // 持久化账号状态
+  if (currentAccount) {
+    currentAccount.status = 'verified';
+    currentAccount.verification_code = code;
+    try {
+      await dbManager.saveAccount(currentAccount);
+      log('✅ 账号状态已更新');
+    } catch (e) {
+      logger.error('[DB] 保存账号失败:', e);
+    }
+  }
+
+  // 仅 API 模式需要把状态同步回云端
+  if (updateCloud && email) {
+    try {
+      await updateAccountStatus(email, 'verified', code);
+      log('✅ 账号状态已同步到云端');
+    } catch (error) {
+      logger.error(`[${sourceTag}] 更新账号状态失败:`, error);
+    }
+  }
+}
+
+/**
+ * 验证码超时/失败的统一处理：决定重试 vs 进入 ERROR
+ * @param {Function} retryFn - 重试函数
+ * @param {string} errorMsg - 失败描述（写入状态机 metadata）
+ */
+function handleVerificationTimeout(retryFn, errorMsg = '验证码获取超时') {
+  if (stateMachine.canRetry()) {
+    stateMachine.transition(RegistrationStateMachine.STATES.RETRYING);
+    stateMachine.saveToStorage().catch(err => logger.error('[StateMachine] 保存状态失败:', err));
+    log('⏱️ 验证码超时，准备重试...', 'warning');
+    setTimeout(retryFn, 3000);
+  } else {
+    stateMachine.transition(RegistrationStateMachine.STATES.ERROR, { error: errorMsg });
+    stateMachine.saveToStorage().catch(err => logger.error('[StateMachine] 保存状态失败:', err));
+    log('⏱️ 验证码获取超时，已达最大重试次数', 'error');
+  }
 }
 
 // 停止 Realtime 监听
@@ -888,47 +899,53 @@ function displayVerificationCode(code) {
   let codeField = document.getElementById('code-field-container');
   
   if (!codeField) {
-    // 首次创建验证码字段
+    // 首次创建验证码字段（使用 DOM API 避免 XSS，并直接绑定事件无需 setTimeout）
     codeField = document.createElement('div');
     codeField.id = 'code-field-container';
     codeField.className = 'field';
-    codeField.innerHTML = `
-      <label>验证码:</label>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span id="verification-code" style="font-weight: bold; color: #10b981; font-size: 16px;">${code}</span>
-        <button id="copy-code-btn" class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;">复制</button>
-      </div>
-    `;
-    accountInfoDiv.appendChild(codeField);
-    
-    // 使用 setTimeout 确保 DOM 渲染完成后绑定事件
-    setTimeout(() => {
-      const copyBtn = document.getElementById('copy-code-btn');
-      if (copyBtn) {
-        copyBtn.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(code);
-            log('✅ 验证码已复制到剪贴板');
-            copyBtn.textContent = '已复制';
-            copyBtn.style.background = '#059669';
-            
-            // 2秒后恢复按钮文本
-            setTimeout(() => {
-              copyBtn.textContent = '复制';
-              copyBtn.style.background = '#10b981';
-            }, 2000);
-          } catch (error) {
-            log('❌ 复制失败: ' + error.message, 'error');
-            alert('复制失败，请手动复制: ' + code);
-          }
-        });
+
+    const label = document.createElement('label');
+    label.textContent = '验证码:';
+    codeField.appendChild(label);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+    const codeSpan = document.createElement('span');
+    codeSpan.id = 'verification-code';
+    codeSpan.style.cssText = 'font-weight: bold; color: #10b981; font-size: 16px;';
+    codeSpan.textContent = String(code);
+    row.appendChild(codeSpan);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.id = 'copy-code-btn';
+    copyBtn.className = 'btn btn-primary';
+    copyBtn.style.cssText = 'padding: 4px 12px; font-size: 12px;';
+    copyBtn.textContent = '复制';
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code);
+        log('✅ 验证码已复制到剪贴板');
+        copyBtn.textContent = '已复制';
+        copyBtn.style.background = '#059669';
+        setTimeout(() => {
+          copyBtn.textContent = '复制';
+          copyBtn.style.background = '#10b981';
+        }, 2000);
+      } catch (error) {
+        log('❌ 复制失败: ' + error.message, 'error');
+        ui.alert('复制失败，请手动复制: ' + code, { title: '❌ 复制失败' });
       }
-    }, 100);
+    });
+    row.appendChild(copyBtn);
+
+    codeField.appendChild(row);
+    accountInfoDiv.appendChild(codeField);
   } else {
     // 更新已存在的验证码
     const codeSpan = document.getElementById('verification-code');
     if (codeSpan) {
-      codeSpan.textContent = code;
+      codeSpan.textContent = String(code);
       log('🔄 验证码已更新');
     }
   }
@@ -1022,13 +1039,19 @@ function updateUIFromState(state, metadata) {
 function updateProgressBar(progress) {
   const progressBar = document.getElementById('progress-bar');
   const progressText = document.getElementById('progress-text');
-  
+  const progressContainer = document.querySelector('.progress-container');
+
   if (progressBar) {
     progressBar.style.width = progress + '%';
   }
-  
+
   if (progressText) {
     progressText.textContent = progress + '%';
+  }
+
+  // 决策理由：同步 ARIA 进度值，让屏幕阅读器正确朗读进度
+  if (progressContainer) {
+    progressContainer.setAttribute('aria-valuenow', String(progress));
   }
 }
 
@@ -1121,6 +1144,7 @@ async function updateAccountStatus(email, status, verificationCode = null) {
 }
 
 // 日志
+// 决策理由：UI 日志面板始终显示给用户，console 输出经 logger 受 LOG_LEVEL 控制
 function log(message, type = 'info') {
   const logs = document.getElementById('logs');
   const logItem = document.createElement('div');
@@ -1139,13 +1163,21 @@ function log(message, type = 'info') {
   logs.appendChild(logItem);
   logs.scrollTop = logs.scrollHeight;
   
-  console.log(`[Popup] ${message}`);
+  // 输出到 console，按 LOG_LEVEL 过滤
+  const prefixed = `[Popup] ${message}`;
+  if (type === 'error') {
+    logger.error(prefixed);
+  } else if (type === 'warning') {
+    logger.warn(prefixed);
+  } else {
+    logger.info(prefixed);
+  }
 }
 
 // 打开超级智能大脑面板
 async function openSuperBrain() {
   if (!superBrain) {
-    alert('超级智能大脑未初始化');
+    ui.toast('超级智能大脑未初始化', 'warning');
     return;
   }
   

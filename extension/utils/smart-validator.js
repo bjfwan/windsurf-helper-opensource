@@ -51,6 +51,10 @@ class SmartValidator {
   }
 
   async checkSupabaseStatus(email) {
+    // 决策理由：扩展已切换为 API 模式，无直连 Supabase 客户端时跳过该检查
+    if (!this.supabase || !this.supabase.url || !this.supabase.key) {
+      return { exists: false, skipped: true };
+    }
     try {
       const response = await fetch(
         `${this.supabase.url}/rest/v1/accounts?email=eq.${encodeURIComponent(email)}&select=*&order=created_at.desc&limit=1`,
@@ -88,6 +92,9 @@ class SmartValidator {
    * 检查是否收到验证码
    */
   async checkVerificationCode(email, sessionId) {
+    if (!this.supabase || !this.supabase.url || !this.supabase.key) {
+      return { exists: false, skipped: true };
+    }
     try {
       // 严格匹配：同时使用 session_id 和 email 查询
       let query = `${this.supabase.url}/rest/v1/verification_logs?order=received_at.desc&limit=1`;

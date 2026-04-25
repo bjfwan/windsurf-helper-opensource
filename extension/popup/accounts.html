@@ -58,21 +58,22 @@
     </div>
     
     <!-- 调试面板 -->
-    <div id="debug-panel" style="position: fixed; bottom: 0; left: 0; right: 0; max-height: 300px; overflow-y: auto; background: #1f2937; border-top: 2px solid #10b981; padding: 10px; font-family: monospace; font-size: 11px; color: #10b981; display: none; z-index: 9999;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+    <div id="debug-panel" class="debug-panel">
+      <div class="debug-panel-header">
         <strong>🐛 调试信息</strong>
-        <div>
-          <button id="copy-debug-btn" style="background: #8b5cf6; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">📋 复制</button>
-          <button id="clear-debug-btn" style="background: #ef4444; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px; margin-right: 5px;">清空</button>
-          <button id="toggle-debug" style="background: #374151; color: white; border: none; padding: 4px 10px; cursor: pointer; border-radius: 3px;">隐藏</button>
+        <div class="debug-panel-actions">
+          <button id="copy-debug-btn" class="btn-debug-copy">📋 复制</button>
+          <button id="clear-debug-btn" class="btn-debug-clear">清空</button>
+          <button id="toggle-debug" class="btn-debug-toggle">隐藏</button>
         </div>
       </div>
-      <div id="debug-logs" style="font-size: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;"></div>
+      <div id="debug-logs" class="debug-logs"></div>
     </div>
-    <button id="show-debug" style="position: fixed; bottom: 10px; right: 10px; background: #10b981; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 5px; font-size: 12px; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.3);">🐛 调试</button>
+    <button id="show-debug" class="debug-show-btn">🐛 调试</button>
   </div>
   
-  <script src="../utils/supabase-rest.js"></script>
+  <script src="../utils/logger.js"></script>
+  <script src="../utils/ui-toast.js"></script>
   <script src="../utils/db-manager.js"></script>
   <script src="../email-config.js"></script>
   <script src="../utils/temp-mail-client.js"></script>

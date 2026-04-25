@@ -51,6 +51,29 @@
   box-sizing: border-box;
 }
 
+/* 决策理由：键盘焦点可见性，避免按 Tab 时焦点不可见。仅在键盘聚焦时显示，不打扰鼠标用户 */
+*:focus { outline: none; }
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 决策理由：尊重用户的减少动画偏好，避免对前庭敏感者造成不适 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 body {
   width: 400px;
   min-width: 400px;
