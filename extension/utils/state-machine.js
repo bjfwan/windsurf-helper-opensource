@@ -14,6 +14,7 @@ class RegistrationStateMachine {
     FILLING_STEP2: 'filling_step2',        // 填充步骤2
     WAITING_CLOUDFLARE: 'waiting_cloudflare',      // 等待Cloudflare验证
     WAITING_VERIFICATION: 'waiting_verification',  // 等待邮箱验证码
+    VERIFYING_RESULT: 'verifying_result',  // 校验注册结果
     COMPLETED: 'completed',                // 完成
     ERROR: 'error',                        // 错误
     RETRYING: 'retrying'                   // 重试中
@@ -29,7 +30,8 @@ class RegistrationStateMachine {
     [this.STATES.WAITING_STEP1_SUBMIT]: [this.STATES.FILLING_STEP2, this.STATES.WAITING_VERIFICATION, this.STATES.ERROR, this.STATES.RETRYING],
     [this.STATES.FILLING_STEP2]: [this.STATES.WAITING_CLOUDFLARE, this.STATES.WAITING_VERIFICATION, this.STATES.ERROR, this.STATES.RETRYING],
     [this.STATES.WAITING_CLOUDFLARE]: [this.STATES.WAITING_VERIFICATION, this.STATES.ERROR, this.STATES.RETRYING],
-    [this.STATES.WAITING_VERIFICATION]: [this.STATES.COMPLETED, this.STATES.ERROR],
+    [this.STATES.WAITING_VERIFICATION]: [this.STATES.VERIFYING_RESULT, this.STATES.ERROR],
+    [this.STATES.VERIFYING_RESULT]: [this.STATES.COMPLETED, this.STATES.ERROR],
     [this.STATES.ERROR]: [this.STATES.RETRYING, this.STATES.IDLE],
     [this.STATES.RETRYING]: [this.STATES.DETECTING_PAGE, this.STATES.ERROR, this.STATES.IDLE],
     [this.STATES.COMPLETED]: [this.STATES.IDLE]
@@ -45,6 +47,7 @@ class RegistrationStateMachine {
     [this.STATES.FILLING_STEP2]: '填充密码...',
     [this.STATES.WAITING_CLOUDFLARE]: '等待Cloudflare验证...',
     [this.STATES.WAITING_VERIFICATION]: '等待验证码...',
+    [this.STATES.VERIFYING_RESULT]: '校验注册结果...',
     [this.STATES.COMPLETED]: '注册完成',
     [this.STATES.ERROR]: '发生错误',
     [this.STATES.RETRYING]: '正在重试...'
@@ -256,6 +259,7 @@ class RegistrationStateMachine {
       [RegistrationStateMachine.STATES.FILLING_STEP2]: 50,
       [RegistrationStateMachine.STATES.WAITING_CLOUDFLARE]: 70,
       [RegistrationStateMachine.STATES.WAITING_VERIFICATION]: 85,
+      [RegistrationStateMachine.STATES.VERIFYING_RESULT]: 92,
       [RegistrationStateMachine.STATES.COMPLETED]: 100,
       [RegistrationStateMachine.STATES.ERROR]: 0,
       [RegistrationStateMachine.STATES.RETRYING]: 15
@@ -277,6 +281,7 @@ class RegistrationStateMachine {
       RegistrationStateMachine.STATES.FILLING_STEP2,
       RegistrationStateMachine.STATES.WAITING_CLOUDFLARE,
       RegistrationStateMachine.STATES.WAITING_VERIFICATION,
+      RegistrationStateMachine.STATES.VERIFYING_RESULT,
       RegistrationStateMachine.STATES.RETRYING
     ];
     return inProgressStates.includes(this.currentState);
@@ -294,6 +299,7 @@ class RegistrationStateMachine {
       RegistrationStateMachine.STATES.FILLING_STEP2,
       RegistrationStateMachine.STATES.WAITING_CLOUDFLARE,
       RegistrationStateMachine.STATES.WAITING_VERIFICATION,
+      RegistrationStateMachine.STATES.VERIFYING_RESULT,
       RegistrationStateMachine.STATES.RETRYING
     ];
     return inProgressStates.includes(this.currentState);

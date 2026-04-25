@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "scripting"
   ],
   "host_permissions": [
     "https://windsurf.com/*",
@@ -22,7 +23,7 @@
         "https://windsurf.com/account/register*",
         "https://windsurf.com/windsurf/signin*"
       ],
-      "js": ["utils/logger.js", "content/content-script.js"],
+      "js": ["protocol-contract.js", "utils/logger.js", "content/content-script.js"],
       "run_at": "document_idle"
     }
   ],

@@ -4,7 +4,76 @@
 
 ---
 
-## [Unreleased] — 全面优化
+## [Unreleased] — 协议层 / 核验器 / 上游探测 加固
+
+本轮聚焦 4 件事：(1) 不再仅靠"页面状态 + 验证码字符串"判定成功；(2) 把上游变更探测收口为
+小而专的关键链路 smoke check；(3) 协议常量集中到一份契约；(4) 清理命名/死代码债务。
+
+### ✨ 新增（Added）
+
+- **`extension/utils/upstream-probe.js`**：独立的上游变更探测器，只跟踪
+  `WindsurfProtocol.upstream.smokePaths` 列出的关键链路（注册页 URL / Step1 输入框 /
+  Step2 密码框 / 继续按钮），同时跑后端 `apiClient.smokeCheck()`，一次性返回
+  `{ ok, summary, upstream, backend, paths }`。**刻意不做**全量接口/选择器接入。
+- **协议契约扩充**：`extension/protocol-contract.js` 增加
+  - `api.methods` / `api.headers` / `api.responseShape` —— HTTP 调用契约集中化
+  - `upstream.smokePaths` —— 关键链路清单
+  - `verification.{ strongSources, weakSources, retries, retryDelayMs, allowDegraded }`
+    —— 注册结果核验策略
+  - `normalizeEmailProvider()` —— provider 别名归一化
+- **核验器**：`registration-verifier.js` 扩充输出，新增 `attempts` 数组、
+  `degraded` 字段、`_isDegradedConfirmable` 决策。在强来源全部 skipped、本地数据自洽时
+  返回 **降级确认**，避免把"独立来源不可用"等同于"成功"或"失败"。
+- **popup.js**：对核验报告分流处理：
+  - `confirmed && !degraded` → 强确认日志 + COMPLETED
+  - `confirmed &&  degraded` → 降级警告日志 + COMPLETED（metadata 记录 degraded）
+  - `!confirmed`             → 失败日志 + ERROR（metadata 携带核验报告）
+
+### ♻️ 重构（Changed）
+
+- **super-brain.js**：
+  - 替换重复的 smoke check 实现，改为消费 `UpstreamProbe.run()`
+  - `checkUpstream()` 直接渲染 `WindsurfProtocol.upstream.smokePaths` 中每条路径的命中状态
+  - `showConfigInfo()` 改读 `WindsurfProtocol.client` / `.api.endpoints`，不再依赖
+    `API_CONFIG.PROTOCOL_VERSION` / `CLIENT_VERSION`
+  - 删除 ~95 行 native messaging 死代码（`analyzeError` 引用项目中并不存在的
+    `backend/native_host.py` / `register.bat`）
+  - `executeSolution` 收敛到本项目实际使用的 action（`reset` / `checkNetwork` /
+    `checkConfig` / `checkPermissions` / `openRegisterPage` / `checkDebug` / `contactAdmin`）
+- **`config.example.js`**：协议字段 `CLIENT_NAME / CLIENT_VERSION / PROTOCOL_VERSION`
+  改为 getter，从 `WindsurfProtocol.client` 转发，避免双源真相。
+
+### 🧹 命名 & 配置债务（Cleaned）
+
+- README、`docs/self-hosted-api.md` 中的 `EMAIL_MODE` 全部统一为 `EMAIL_PROVIDER`，
+  与 `email-config.example.js` 对齐。`EMAIL_CONFIG.mode` 仍保留为兼容 getter，
+  指向 `provider`，不破坏既有用户配置。
+- `email-config.example.js` 顶部追加命名说明：顶层 `provider` 是"邮箱来源"，
+  `tempMail.provider` 是来源下的"具体服务"——避免一词两义。
+
+### 📚 文档（Documentation）
+
+- `ARCHITECTURE.md` 增加 `3.1 注册结果核验器` 与 `3.2 上游变更探测器` 两节，
+  并补全脚本加载顺序（`protocol-contract.js` 必须早于 `email-config.js` / `config.js`）。
+
+### 📦 文件级摘要（本轮）
+
+| 路径 | 状态 |
+|---|---|
+| `extension/utils/upstream-probe.js` | 新增 |
+| `extension/protocol-contract.js` | 修改（扩充协议常量 + 核验策略 + smoke 路径） |
+| `extension/utils/registration-verifier.js` | 重写（degraded 模式 + attempts 报告 + 策略外置） |
+| `extension/utils/super-brain.js` | 重构（接入 UpstreamProbe + 删死代码 + 改 protocol 常量） |
+| `extension/popup/index.html` | 修改（加载 upstream-probe.js） |
+| `extension/popup/popup.js` | 修改（分流处理 verifier 报告） |
+| `extension/email-config.example.js` | 修改（命名说明 + 注释） |
+| `extension/config.example.js` | 修改（协议字段改 getter） |
+| `README.md` / `docs/self-hosted-api.md` | 修改（EMAIL_MODE → EMAIL_PROVIDER） |
+| `ARCHITECTURE.md` | 修改（3.1 / 3.2 节 + 脚本顺序） |
+
+---
+
+## [Previous] — 全面优化
 
 涵盖 P0（紧急修复）、P1（核心质量）、UI（体验提升）、P2（开发者文档）共 9 个主题的优化，以及 3 项后续工作（F1-F3）。
 

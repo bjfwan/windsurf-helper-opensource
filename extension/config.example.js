@@ -1,45 +1,33 @@
 /**
- * API配置文件示例
- * 
- * 使用说明：
- * 1. 复制此文件为 config.js
- * 2. 填写您自己部署的API地址和Supabase信息
- * 3. config.js 已在 .gitignore 中，不会被提交到Git
- * 
- * 注意：这些是您的私密配置，请勿分享！
+ * API 客户端运行时配置模板
+ *
+ * 决策理由：协议层常量（客户端名 / 版本 / 协议版本 / endpoints / headers / metadata）
+ *           统一由 protocol-contract.js 维护，本文件只保留与"用户运行环境"相关的字段：
+ *           - BASE_URL    : 后端地址（本地 vs Vercel）
+ *           - API_KEY     : 后端如设置了网关密钥，才需要填
+ *           - TIMEOUT     : 单次请求超时
+ *           - POLL_INTERVAL: 验证码轮询间隔
+ *
+ *           CLIENT_NAME / CLIENT_VERSION / PROTOCOL_VERSION 由 getter 从协议契约转发，
+ *           保持向后兼容（旧代码读 API_CONFIG.PROTOCOL_VERSION 仍可用）。
  */
+const protocolClient = typeof WindsurfProtocol !== 'undefined'
+  ? WindsurfProtocol.client
+  : {
+      name: 'windsurf-helper-opensource',
+      version: '4.0.0',
+      protocolVersion: '1'
+    };
 
-// ==================== API 配置 ====================
 const API_CONFIG = {
-  // 本地后端地址（运行 backend/server.js 后默认监听 3000 端口）
-  // 如果部署到 Vercel，改为 'https://your-project.vercel.app'
   BASE_URL: 'http://localhost:3000',
-  
-  // API密钥（可选，如果后端设置了的话）
   API_KEY: '',
-  
-  // 请求超时时间（毫秒）
   TIMEOUT: 10000,
-  
-  // 验证码轮询间隔（毫秒）
   POLL_INTERVAL: 5000,
-  
-  // API端点配置
-  ENDPOINTS: {
-    HEALTH: '/api/health',
-    START_MONITOR: '/api/start-monitor',
-    CHECK_CODE: '/api/check-code',
-    SAVE_ACCOUNT: '/api/accounts',
-    UPDATE_ACCOUNT: '/api/accounts',
-    DELETE_ACCOUNT: '/api/accounts',
-    GET_ACCOUNTS: '/api/accounts'
-  }
-};
 
-// ==================== Supabase 配置（可选） ====================
-// 注意：Serverless版本不需要直接访问Supabase，所有请求通过API转发
-// 如果您的API已经处理了Supabase交互，可以不配置此部分
-const SUPABASE_CONFIG = {
-  url: 'https://xxxxx.supabase.co',
-  key: 'your-anon-key-here'
+  // 决策理由：getter 转发避免在多份配置里重复声明协议字段，
+  // 如需"快照"语义（避免运行时被改动）可改回 const 直拷贝。
+  get CLIENT_NAME() { return protocolClient.name; },
+  get CLIENT_VERSION() { return protocolClient.version; },
+  get PROTOCOL_VERSION() { return protocolClient.protocolVersion; }
 };

@@ -297,18 +297,14 @@ const debugPanel = {
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
   debugPanel.init();
-  await initSupabase();
+  await initRuntimeClients();
   setupEventListeners();
   await loadAccounts();
 });
 
-// 初始化
-async function initSupabase() {
+async function initRuntimeClients() {
   try {
-    // 使用API而非直接Supabase访问
     console.log('✅ API客户端就绪');
-
-    // 初始化 IndexedDB
     await dbManager.init();
     console.log('✅ IndexedDB 就绪');
   } catch (error) {
@@ -396,40 +392,32 @@ async function loadAccounts() {
       console.log('💾 从 IndexedDB 加载账号:', allAccounts.length);
     }
 
-    // 2. 尝试从云端API加载并合并（在线同步）
-    // 决策理由：始终从云端同步最新数据
+    // 2. 尝试从后端加载并合并（在线同步）
     try {
-      const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.GET_ACCOUNTS}?limit=100`, {
-        headers: {
-          'X-API-Key': API_CONFIG.API_KEY
-        }
-      });
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data) {
-          const supabaseAccounts = result.data;
-          console.log('☁️ 从云端加载账号:', supabaseAccounts.length);
+      const result = await apiClient.listAccounts({ limit: 100 });
+      if (result.success && result.data) {
+          const backendAccounts = result.data;
+          console.log('☁️ 从后端加载账号:', backendAccounts.length);
 
           const localMap = new Map((localAccounts || []).map(a => [a.email, a]));
-          const merged = supabaseAccounts.map(sa => {
-            const la = localMap.get(sa.email);
-            return la ? {
-              ...sa,
-              session_id: la.session_id || sa.session_id,
-              password: sa.password || la.password,
-              username: sa.username || la.username,
-              verification_code: sa.verification_code || la.verification_code
-            } : sa;
+          const merged = backendAccounts.map(remoteAccount => {
+            const localAccount = localMap.get(remoteAccount.email);
+            return localAccount ? {
+              ...remoteAccount,
+              session_id: localAccount.session_id || remoteAccount.session_id,
+              password: remoteAccount.password || localAccount.password,
+              username: remoteAccount.username || localAccount.username,
+              verification_code: remoteAccount.verification_code || localAccount.verification_code
+            } : remoteAccount;
           });
-          const supaEmails = new Set(supabaseAccounts.map(sa => sa.email));
-          const missingLocals = (localAccounts || []).filter(a => !supaEmails.has(a.email));
+          const backendEmails = new Set(backendAccounts.map(remoteAccount => remoteAccount.email));
+          const missingLocals = (localAccounts || []).filter(account => !backendEmails.has(account.email));
           allAccounts = merged.concat(missingLocals);
 
           dbManager.saveAccountsBatch(allAccounts);
-        }
       }
     } catch (cloudError) {
-      console.warn('⚠️ 云端加载失败，使用本地数据:', cloudError);
+      console.warn('⚠️ 后端加载失败，使用本地数据:', cloudError);
     }
 
     filteredAccounts = [...allAccounts];
@@ -607,7 +595,7 @@ async function viewMailbox(email) {
   }
 
   // 检查是否为临时邮箱模式
-  if (typeof EMAIL_CONFIG === 'undefined' || EMAIL_CONFIG.mode !== 'temp-mail') {
+  if (typeof EMAIL_CONFIG === 'undefined' || !isTempMailProvider(EMAIL_CONFIG)) {
     await ui.alert('此功能仅适用于临时邮箱模式', { title: '⚠️ 提示' });
     return;
   }
@@ -668,7 +656,7 @@ async function checkVerificationCode(email) {
     setCodeDisplay(email, '查询中...', 'is-querying');
 
     // ===== 临时邮箱模式 =====
-    if (typeof EMAIL_CONFIG !== 'undefined' && EMAIL_CONFIG.mode === 'temp-mail') {
+    if (typeof EMAIL_CONFIG !== 'undefined' && isTempMailProvider(EMAIL_CONFIG)) {
       const account = allAccounts.find(a => a.email === email);
       if (!account || !account.tempMailToken) {
         setCodeDisplay(email, '缺少邮箱令牌', 'is-error');
@@ -736,24 +724,12 @@ async function checkVerificationCode(email) {
       setCodeDisplay(email, `查询中(${elapsed}s)...`, 'is-querying');
 
       try {
-        const apiUrl = `${API_CONFIG.BASE_URL}/api/check-code/${encodeURIComponent(sessionId)}`;
-        const response = await fetch(apiUrl, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': API_CONFIG.API_KEY,
-            'Cache-Control': 'no-store',
-            'Pragma': 'no-cache'
-          }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.success && data.code) {
-            found = data.code;
-            break;
-          }
+        const data = await apiClient.checkCode(sessionId);
+        if (data && data.success && data.code) {
+          found = data.code;
+          break;
         } else {
-          logger?.warn?.('[查询验证码] API状态码非 OK:', response.status);
+          logger?.warn?.('[查询验证码] 尚未收到验证码');
         }
       } catch (fetchError) {
         logger?.warn?.('[查询验证码] API请求异常:', fetchError);
@@ -778,6 +754,7 @@ async function applyVerificationCode(email, code, sessionId) {
   if (account) {
     account.verification_code = code;
     account.status = 'verified';
+    account.verified_at = new Date().toISOString();
     if (sessionId) account.session_id = sessionId;
 
     try {
@@ -786,20 +763,16 @@ async function applyVerificationCode(email, code, sessionId) {
       logger?.warn?.('[查询验证码] 本地保存失败:', e);
     }
 
-    // 云端同步（失败不影响本地体验）
+    // 后端同步（失败不影响本地体验）
     try {
-      if (typeof API_CONFIG !== 'undefined' && API_CONFIG?.ENDPOINTS?.UPDATE_ACCOUNT) {
-        await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPDATE_ACCOUNT}`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': API_CONFIG.API_KEY
-          },
-          body: JSON.stringify({ email, verification_code: code, status: 'verified' })
-        });
-      }
+      await apiClient.updateAccount({
+        email,
+        verification_code: code,
+        status: 'verified',
+        verified_at: account.verified_at
+      });
     } catch (cloudError) {
-      logger?.warn?.('⚠️ 云端同步失败:', cloudError);
+      logger?.warn?.('⚠️ 后端同步失败:', cloudError);
     }
   }
 
@@ -824,23 +797,15 @@ async function deleteAccount(email) {
     let cloudOk = false;
     let localOk = false;
 
-    // 1. 云端删除（失败也继续清本地，避免本地一直残留无效记录）
+    // 1. 后端删除（失败也继续清本地，避免本地一直残留无效记录）
     try {
-      if (typeof API_CONFIG !== 'undefined' && API_CONFIG?.ENDPOINTS?.DELETE_ACCOUNT) {
-        const response = await fetch(
-          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.DELETE_ACCOUNT}?email=${encodeURIComponent(email)}`,
-          {
-            method: 'DELETE',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-API-Key': API_CONFIG.API_KEY
-            }
-          }
-        );
-        cloudOk = response.ok;
+      const target = allAccounts.find(account => account.email === email);
+      if (target?.id) {
+        const response = await apiClient.deleteAccount(target.id);
+        cloudOk = !!response?.success;
       }
     } catch (cloudError) {
-      logger?.warn?.('⚠️ 云端删除失败:', cloudError);
+      logger?.warn?.('⚠️ 后端删除失败:', cloudError);
     }
 
     // 2. IndexedDB

@@ -224,7 +224,7 @@ vercel --prod
 #### 5.1 修改 `extension/email-config.js`
 
 ```javascript
-const EMAIL_MODE = 'qq-imap';  // 启用本地后端 / Vercel 模式
+const EMAIL_PROVIDER = 'qq-imap';  // 启用本地后端 / Vercel 模式
 
 const QQ_IMAP_CONFIG = {
   domain: 'yourdomain.com',      // 填写您的域名

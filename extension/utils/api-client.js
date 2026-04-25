@@ -1,111 +1,178 @@
-/**
- * API客户端 - 与云端服务器通信
- */
-
 class APIClient {
   constructor() {
+    this.protocol = typeof WindsurfProtocol !== 'undefined'
+      ? WindsurfProtocol
+      : {
+          api: {
+            endpoints: {
+              health: '/api/health',
+              startMonitor: '/api/start-monitor',
+              checkCode: '/api/check-code',
+              accounts: '/api/accounts'
+            }
+          },
+          headers(apiKey = '', extra = {}) {
+            return {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey || '',
+              ...extra
+            };
+          }
+        };
     this.baseURL = API_CONFIG.BASE_URL;
     this.timeout = API_CONFIG.TIMEOUT;
+    this.apiKey = API_CONFIG.API_KEY || '';
   }
 
-  /**
-   * 发送HTTP请求
-   */
-  async request(endpoint, options = {}) {
-    const url = `${this.baseURL}${endpoint}`;
-    const config = {
-      method: options.method || 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': API_CONFIG.API_KEY,
-        ...options.headers
-      },
-      ...options
-    };
+  buildURL(endpoint, query = {}) {
+    const url = new URL(`${this.baseURL}${endpoint}`);
+    Object.entries(query || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, value);
+      }
+    });
+    return url.toString();
+  }
+
+  buildHeaders(extra = {}) {
+    return this.protocol.headers(this.apiKey, extra);
+  }
+
+  async fetchResponse(endpoint, options = {}, query = {}) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), options.timeout || this.timeout);
+    const requestOptions = { ...options };
+    const headers = this.buildHeaders(requestOptions.headers || {});
+
+    if (requestOptions.body && typeof requestOptions.body === 'object' && !(requestOptions.body instanceof FormData)) {
+      requestOptions.body = JSON.stringify(requestOptions.body);
+    }
+
+    delete requestOptions.timeout;
+    requestOptions.headers = headers;
+    requestOptions.signal = controller.signal;
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-      const response = await fetch(url, {
-        ...config,
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const response = await fetch(this.buildURL(endpoint, query), requestOptions);
+      const text = await response.text();
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { success: response.ok, raw: text };
+        }
       }
 
-      return await response.json();
+      return {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
     } catch (error) {
       if (error.name === 'AbortError') {
-        throw new Error('请求超时');
+        return {
+          ok: false,
+          status: 0,
+          data: { success: false, error: '请求超时' }
+        };
       }
-      throw error;
+
+      return {
+        ok: false,
+        status: 0,
+        data: { success: false, error: error.message }
+      };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
-  /**
-   * 启动邮箱监控
-   */
+  async request(endpoint, options = {}, query = {}) {
+    const response = await this.fetchResponse(endpoint, options, query);
+    if (!response.ok) {
+      throw new Error(response.data?.error || `HTTP ${response.status}`);
+    }
+    return response.data;
+  }
+
+  async health() {
+    return this.request(this.protocol.api.endpoints.health);
+  }
+
   async startMonitor(email, sessionId) {
-    console.log(`[API] 启动监控: ${email}`);
-    
-    return await this.request(API_CONFIG.ENDPOINTS.START_MONITOR, {
+    return this.request(this.protocol.api.endpoints.startMonitor, {
       method: 'POST',
-      body: JSON.stringify({
-        email: email,
+      body: {
+        email,
         session_id: sessionId
-      })
+      }
     });
   }
 
-  /**
-   * 检查验证码
-   */
   async checkCode(sessionId) {
-    const endpoint = `${API_CONFIG.ENDPOINTS.CHECK_CODE}/${sessionId}`;
-    return await this.request(endpoint);
+    return this.request(`${this.protocol.api.endpoints.checkCode}/${encodeURIComponent(sessionId)}`);
   }
 
-  /**
-   * 健康检查
-   */
-  async health() {
-    return await this.request(API_CONFIG.ENDPOINTS.HEALTH);
+  async listAccounts(query = {}) {
+    return this.request(this.protocol.api.endpoints.accounts, {}, query);
   }
 
-  /**
-   * 轮询检查验证码
-   */
-  async pollForCode(sessionId, maxAttempts = 60) {
-    console.log(`[API] 开始轮询验证码: ${sessionId}`);
-    
-    for (let i = 0; i < maxAttempts; i++) {
-      try {
-        const result = await this.checkCode(sessionId);
-        
-        if (result.success && result.code) {
-          console.log(`[API] ✅ 收到验证码: ${result.code}`);
-          return result;
+  async saveAccount(account) {
+    return this.request(this.protocol.api.endpoints.accounts, {
+      method: 'POST',
+      body: account
+    });
+  }
+
+  async updateAccount(account) {
+    return this.request(this.protocol.api.endpoints.accounts, {
+      method: 'PATCH',
+      body: account
+    });
+  }
+
+  async deleteAccount(id) {
+    return this.request(`${this.protocol.api.endpoints.accounts}/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async backendSmokeCheck() {
+    const probeSession = `probe-${Date.now()}`;
+    const probeEmail = `${probeSession}@windsurf-helper.local`;
+    const [health, accounts, monitor] = await Promise.all([
+      this.fetchResponse(this.protocol.api.endpoints.health),
+      this.fetchResponse(this.protocol.api.endpoints.accounts, {}, { limit: 1 }),
+      this.fetchResponse(this.protocol.api.endpoints.startMonitor, {
+        method: 'POST',
+        body: {
+          email: probeEmail,
+          session_id: probeSession
         }
-        
-        // 等待后重试
-        await new Promise(resolve => setTimeout(resolve, API_CONFIG.POLL_INTERVAL));
-      } catch (error) {
-        console.warn(`[API] 轮询失败 (${i + 1}/${maxAttempts}):`, error.message);
-        
-        if (i < maxAttempts - 1) {
-          await new Promise(resolve => setTimeout(resolve, API_CONFIG.POLL_INTERVAL));
-        }
+      })
+    ]);
+
+    const checkCode = await this.fetchResponse(
+      `${this.protocol.api.endpoints.checkCode}/${encodeURIComponent(probeSession)}`
+    );
+
+    return {
+      success: health.ok && accounts.ok && monitor.ok && checkCode.ok,
+      data: {
+        probeEmail,
+        probeSession,
+        health,
+        accounts,
+        monitor,
+        checkCode
       }
-    }
-    
-    throw new Error('轮询超时：未收到验证码');
+    };
+  }
+
+  async smokeCheck() {
+    return this.backendSmokeCheck();
   }
 }
 
-// 导出单例
 const apiClient = new APIClient();

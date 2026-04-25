@@ -1,51 +1,129 @@
 class SuperBrain {
-  constructor(supabaseClient, stateMachine, smartValidator) {
-    this.supabase = supabaseClient;
+  constructor(apiClient, stateMachine, smartValidator) {
+    this.apiClient = apiClient;
     this.stateMachine = stateMachine;
     this.validator = smartValidator;
-    
-    // 健康状态（云端版本）
+
     this.health = {
       frontend: { status: 'unknown', details: {} },
-      cloudAPI: { status: 'unknown', details: {} },
-      supabase: { status: 'unknown', details: {} },
+      backend: { status: 'unknown', details: {} },
+      upstream: { status: 'unknown', details: {} },
       overall: { status: 'unknown', score: 0 }
     };
-    
-    // 智能建议
+
+    this.lastProbeReport = null;
     this.recommendations = [];
-    
-    // 可视化面板元素
     this.panel = null;
+
+    // 决策理由：复用统一的 UpstreamProbe，避免本类与 content-script 各自维护一份探测逻辑
+    this.upstreamProbe = (typeof UpstreamProbe !== 'undefined')
+      ? new UpstreamProbe({
+          apiClient: this.apiClient,
+          getActiveTab: () => this.getActiveTab(),
+          sendTabMessage: (tabId, message) => this.sendTabMessage(tabId, message)
+        })
+      : null;
   }
+
+  get upstream() {
+    return typeof WindsurfProtocol !== 'undefined' && WindsurfProtocol.upstream
+      ? WindsurfProtocol.upstream
+      : {
+          registerUrl: 'https://windsurf.com/account/register',
+          selectors: {
+            step1Inputs: 'input[type="text"], input[type="email"]',
+            emailInputs: 'input[type="email"]',
+            passwordInputs: 'input[type="password"]'
+          }
+        };
+  }
+
+  get protocolClient() {
+    return (typeof WindsurfProtocol !== 'undefined' && WindsurfProtocol.client)
+      ? WindsurfProtocol.client
+      : { name: 'windsurf-helper-opensource', version: '4.0.0', protocolVersion: '1' };
+  }
+
+  get protocolEndpoints() {
+    return (typeof WindsurfProtocol !== 'undefined' && WindsurfProtocol.api?.endpoints)
+      ? WindsurfProtocol.api.endpoints
+      : { health: '/api/health', startMonitor: '/api/start-monitor', checkCode: '/api/check-code', accounts: '/api/accounts' };
+  }
+
+  async getActiveTab() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+  }
+
+  async sendTabMessage(tabId, message) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  async runRegistrationSmokeCheck() {
+    if (this.upstreamProbe) {
+      const report = await this.upstreamProbe.run();
+      this.lastProbeReport = report;
+      const upstream = report.upstream || {};
+      return {
+        success: !!(upstream.data && upstream.data.success),
+        status: upstream.status || 'unknown',
+        data: upstream.data || null,
+        reason: upstream.reason,
+        report
+      };
+    }
+
+    // 兜底（理论上 upstreamProbe 一定有，保留兜底是为了在 import 顺序异常时不直接崩）
+    const tab = await this.getActiveTab();
+    if (!tab?.id || !tab.url) {
+      return { success: false, status: 'unknown', reason: '未找到当前标签页' };
+    }
+    if (!this.upstream.isRegistrationUrl?.(tab.url)) {
+      return { success: false, status: 'unknown', reason: '当前标签页不是注册页', url: tab.url };
+    }
+    try {
+      const response = await this.sendTabMessage(tab.id, { action: 'smokeCheck' });
+      return {
+        success: !!response?.data?.success,
+        status: response?.data?.success ? 'healthy' : 'warning',
+        data: response?.data || null
+      };
+    } catch (error) {
+      return { success: false, status: 'error', reason: error.message };
+    }
+  }
+
   async fullHealthCheck() {
-    console.log('[SuperBrain] 🧠 开始全面健康检查（云端版本）...');
+    console.log('[SuperBrain] 开始全面健康检查...');
     console.log('[SuperBrain] [1/3] 检测前端组件...');
-    console.log('[SuperBrain] [2/3] 检测云端API...');
-    console.log('[SuperBrain] [3/3] 检测 Supabase 连接...');
+    console.log('[SuperBrain] [2/3] 检测后端API...');
+    console.log('[SuperBrain] [3/3] 检测关键链路...');
     
     const checks = await Promise.allSettled([
       this.checkFrontend(),
-      this.checkCloudAPI(),
-      this.checkSupabase()
+      this.checkBackend(),
+      this.checkUpstream()
     ]);
     
-    // 汇总结果
     this.health.frontend = checks[0].status === 'fulfilled' ? checks[0].value : { status: 'error', error: checks[0].reason };
-    this.health.cloudAPI = checks[1].status === 'fulfilled' ? checks[1].value : { status: 'error', error: checks[1].reason };
-    this.health.supabase = checks[2].status === 'fulfilled' ? checks[2].value : { status: 'error', error: checks[2].reason };
+    this.health.backend = checks[1].status === 'fulfilled' ? checks[1].value : { status: 'error', error: checks[1].reason };
+    this.health.upstream = checks[2].status === 'fulfilled' ? checks[2].value : { status: 'error', error: checks[2].reason };
     
     console.log('[SuperBrain] 前端:', this.health.frontend.status);
-    console.log('[SuperBrain] 云端API:', this.health.cloudAPI.status);
-    console.log('[SuperBrain] Supabase:', this.health.supabase.status);
+    console.log('[SuperBrain] 后端API:', this.health.backend.status);
+    console.log('[SuperBrain] 关键链路:', this.health.upstream.status);
     
-    // 计算总体健康分数
     this.calculateOverallHealth();
-    
-    // 生成智能建议
     this.generateRecommendations();
-    
-    console.log('[SuperBrain] ✅ 健康检查完成 - 分数:', this.health.overall.score);
+    console.log('[SuperBrain] 健康检查完成 - 分数:', this.health.overall.score);
     
     return this.health;
   }
@@ -69,8 +147,7 @@ class SuperBrain {
       const permissions = await chrome.permissions.getAll();
       result.details.permissions = permissions ? '✅ 权限正常' : '❌ 权限缺失';
       
-      // 检查4：Supabase客户端
-      result.details.supabaseClient = this.supabase ? '✅ 已初始化' : '❌ 未初始化';
+      result.details.apiClient = this.apiClient ? '✅ 已初始化' : '❌ 未初始化';
       
       result.status = 'healthy';
     } catch (error) {
@@ -82,128 +159,68 @@ class SuperBrain {
   }
   
   /**
-   * 检查云端API状态
+   * 检查后端API状态
    */
-  async checkCloudAPI() {
+  async checkBackend() {
     const result = { status: 'unknown', details: {} };
     
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-      
-      // 检查1：API健康检查
-      const response = await fetch(`${API_CONFIG.BASE_URL}/api/health`, {
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (response.ok) {
-        const data = await response.json();
-        result.details.apiStatus = `✅ ${data.status}`;
-        result.details.message = data.message;
-        
-        // 检查各项服务
-        if (data.checks) {
-          result.details.supabase = data.checks.supabase ? '✅ 连接正常' : '❌ 连接失败';
-          result.details.email = data.checks.email ? '✅ 连接正常' : '⚠️ 邮箱异常';
-        }
-        
-        result.status = data.status === 'ok' ? 'healthy' : 'warning';
-      } else {
-        result.details.apiStatus = '⚠️ 响应异常';
-        result.status = 'warning';
-      }
+      const data = await this.apiClient.health();
+      result.details.apiStatus = data?.success ? `✅ ${data.status}` : '⚠️ 响应异常';
+      result.details.sessions = data?.session_count !== undefined ? `会话 ${data.session_count}` : '';
+      result.details.accounts = data?.account_count !== undefined ? `账号 ${data.account_count}` : '';
+      result.status = data?.success ? 'healthy' : 'warning';
     } catch (error) {
       result.details.apiStatus = '❌ 无法连接';
-      result.details.error = error.name === 'AbortError' ? '请求超时' : error.message;
+      result.details.error = error.message;
       result.details.url = API_CONFIG.BASE_URL;
       result.status = 'error';
     }
-    
-    // 检查2：Cloudflare Tunnel状态
-    try {
-      const tunnelCheck = await fetch(`${API_CONFIG.BASE_URL}/`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(2000)
-      });
-      
-      result.details.tunnel = tunnelCheck.ok ? '✅ Tunnel正常' : '⚠️ Tunnel异常';
-    } catch (error) {
-      result.details.tunnel = '❌ Tunnel未连接';
-    }
-    
+
     return result;
   }
   
   /**
-   * 检查 Supabase 连接
+   * 检查关键链路
+   * 决策理由：直接消费 UpstreamProbe 输出的 paths 列表，让"哪条路径出问题"
+   * 与协议契约（WindsurfProtocol.upstream.smokePaths）严格对应。
    */
-  async checkSupabase() {
+  async checkUpstream() {
     const result = { status: 'unknown', details: {} };
-    
-    // 决策理由：扩展已迁移到 API 模式，无 Supabase 客户端时直接标记为不适用
-    if (!this.supabase || !this.supabase.url || !this.supabase.key) {
-      result.status = 'healthy';
-      result.details.mode = 'ℹ️ API 模式（无需直连 Supabase）';
-      return result;
-    }
-    
+
     try {
-      // 决策理由：添加超时控制，避免网络问题导致无限等待
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
-      
-      // 检查1：REST API 连接
-      const response = await fetch(`${this.supabase.url}/rest/v1/`, {
-        headers: {
-          'apikey': this.supabase.key,
-          'Authorization': `Bearer ${this.supabase.key}`
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      result.details.restApi = response.ok ? '✅ 可访问' : '❌ 连接失败';
-      
-      // 检查2：accounts 表（带超时）
-      const controller2 = new AbortController();
-      const timeoutId2 = setTimeout(() => controller2.abort(), 2000);
-      
-      const accountsCheck = await fetch(`${this.supabase.url}/rest/v1/accounts?limit=1`, {
-        headers: {
-          'apikey': this.supabase.key,
-          'Authorization': `Bearer ${this.supabase.key}`
-        },
-        signal: controller2.signal
-      });
-      
-      clearTimeout(timeoutId2);
-      result.details.accountsTable = accountsCheck.ok ? '✅ 可访问' : '❌ 无权限';
-      
-      // 检查3：verification_logs 表（带超时）
-      const controller3 = new AbortController();
-      const timeoutId3 = setTimeout(() => controller3.abort(), 2000);
-      
-      const logsCheck = await fetch(`${this.supabase.url}/rest/v1/verification_logs?limit=1`, {
-        headers: {
-          'apikey': this.supabase.key,
-          'Authorization': `Bearer ${this.supabase.key}`
-        },
-        signal: controller3.signal
-      });
-      
-      clearTimeout(timeoutId3);
-      result.details.logsTable = logsCheck.ok ? '✅ 可访问' : '❌ 无权限';
-      
-      result.status = response.ok && accountsCheck.ok && logsCheck.ok ? 'healthy' : 'warning';
+      const smoke = await this.runRegistrationSmokeCheck();
+      result.status = smoke.status || 'unknown';
+
+      if (smoke.status === 'unknown') {
+        result.details.page = `ℹ️ ${smoke.reason || '探测被跳过'}`;
+        if (smoke.report?.upstream?.url) {
+          result.details.url = smoke.report.upstream.url;
+        }
+        return result;
+      }
+
+      const paths = smoke.report?.paths || [];
+      if (paths.length > 0) {
+        for (const path of paths) {
+          const icon = path.ok === true ? '✅' : path.ok === false ? '❌' : 'ℹ️';
+          result.details[path.id] = `${icon} ${path.desc}：${path.reason}`;
+        }
+      } else if (smoke.data) {
+        // 兼容旧路径
+        result.details.url = smoke.data?.urlMatched ? '✅ URL 识别正常' : '❌ URL 未匹配';
+        result.details.step = `步骤识别: ${smoke.data?.step || 'unknown'}`;
+      }
+
+      if (smoke.report?.upstream?.url) {
+        result.details.tabUrl = smoke.report.upstream.url;
+      }
     } catch (error) {
       result.status = 'error';
       result.error = error.message;
-      result.details.connection = '❌ 网络错误';
+      result.details.connection = '❌ 注册页 smoke check 失败';
     }
-    
+
     return result;
   }
   
@@ -221,8 +238,8 @@ class SuperBrain {
     
     const components = [
       this.health.frontend,
-      this.health.cloudAPI,
-      this.health.supabase
+      this.health.backend,
+      this.health.upstream
     ];
     
     let totalScore = 0;
@@ -256,12 +273,11 @@ class SuperBrain {
   generateRecommendations() {
     this.recommendations = [];
     
-    // 检查云端API状态
-    if (this.health.cloudAPI.status !== 'healthy') {
-      if (this.health.cloudAPI.status === 'error') {
+    if (this.health.backend.status !== 'healthy') {
+      if (this.health.backend.status === 'error') {
         this.recommendations.push({
           priority: 'high',
-          title: '云端API服务无法连接',
+          title: '后端API服务无法连接',
           description: '无法启动邮箱监控和接收验证码',
           solutions: [
             { action: 'checkNetwork', text: '检查网络连接' },
@@ -269,42 +285,22 @@ class SuperBrain {
             { action: 'contactAdmin', text: '联系服务提供者确认API服务器状态' }
           ]
         });
-      } else if (this.health.cloudAPI.details.email?.includes('❌') || this.health.cloudAPI.details.email?.includes('⚠️')) {
-        this.recommendations.push({
-          priority: 'medium',
-          title: '邮箱监控服务异常',
-          description: '可能无法自动接收验证码',
-          solutions: [
-            { action: 'contactAdmin', text: '联系服务提供者检查邮箱配置' },
-            { action: 'manual', text: '暂时可手动填写验证码' }
-          ]
-        });
-      }
-      
-      if (this.health.cloudAPI.details.tunnel?.includes('❌')) {
-        this.recommendations.push({
-          priority: 'high',
-          title: 'Cloudflare Tunnel未连接',
-          description: '公网无法访问API服务',
-          solutions: [
-            { action: 'contactAdmin', text: '联系服务提供者启动Tunnel服务' }
-          ]
-        });
       }
     }
     
-    // 检查 Supabase 状态
-    if (this.health.supabase.status !== 'healthy') {
-      this.recommendations.push({
-        priority: 'high',
-        title: 'Supabase 连接异常',
-        description: '无法保存账号和接收验证码',
-        solutions: [
-          { action: 'checkNetwork', text: '检查网络连接' },
-          { action: 'checkConfig', text: '检查 config.js 中的配置' },
-          { action: 'checkPermissions', text: '检查 manifest.json 权限' }
-        ]
-      });
+    if (this.health.upstream.status !== 'healthy') {
+      if (this.health.upstream.status === 'warning' || this.health.upstream.status === 'error') {
+        this.recommendations.push({
+          priority: 'high',
+          title: '注册页链路探测异常',
+          description: 'Windsurf 注册页结构可能已经变化',
+          solutions: [
+            { action: 'openRegisterPage', text: '打开注册页' },
+            { action: 'checkPermissions', text: '检查扩展权限' },
+            { action: 'checkDebug', text: '查看详细调试' }
+          ]
+        });
+      }
     }
     
     // 检查状态机卡住
@@ -353,8 +349,8 @@ class SuperBrain {
       
       <div class="brain-components">
         ${this.renderComponent('前端', this.health.frontend)}
-        ${this.renderComponent('云端API', this.health.cloudAPI)}
-        ${this.renderComponent('Supabase', this.health.supabase)}
+        ${this.renderComponent('后端API', this.health.backend)}
+        ${this.renderComponent('关键链路', this.health.upstream)}
       </div>
       
       ${this.recommendations.length > 0 ? `
@@ -513,7 +509,7 @@ class SuperBrain {
       <div class="brain-header">
         <div class="brain-title">
           <span class="brain-emoji">🐛</span>
-          <span>云端API详细调试</span>
+          <span>后端与链路详细调试</span>
         </div>
       </div>
       
@@ -562,27 +558,41 @@ class SuperBrain {
   
   /**
    * 显示配置信息
+   * 决策理由：版本/协议字段统一从 WindsurfProtocol.client 读，
+   * API_CONFIG 只保留与运行环境相关的字段（BASE_URL / TIMEOUT / POLL_INTERVAL）。
    */
   showConfigInfo() {
     const configLog = document.getElementById('debug-config');
-    
+    const ep = this.protocolEndpoints;
+    const cli = this.protocolClient;
+
     const info = [
       `✅ 扩展ID: ${chrome.runtime.id}`,
       `✅ API地址: ${API_CONFIG.BASE_URL}`,
-      `✅ apiClient状态: ${typeof apiClient !== 'undefined' ? '已初始化' : '未初始化'}`,
+      `✅ apiClient状态: ${this.apiClient ? '已初始化' : '未初始化'}`,
+      `✅ 协议版本: ${cli.protocolVersion}`,
+      `✅ 客户端: ${cli.name} v${cli.version}`,
       `⏱️ 请求超时: ${API_CONFIG.TIMEOUT}ms`,
       `🔄 轮询间隔: ${API_CONFIG.POLL_INTERVAL}ms`,
       ``,
-      `📂 API端点:`,
-      `  启动监控: ${API_CONFIG.ENDPOINTS.START_MONITOR}`,
-      `  查询验证码: ${API_CONFIG.ENDPOINTS.CHECK_CODE}`,
-      `  健康检查: ${API_CONFIG.ENDPOINTS.HEALTH}`,
+      `📂 API端点（来自协议契约）：`,
+      `  健康检查: ${ep.health}`,
+      `  启动监控: ${ep.startMonitor}`,
+      `  查询验证码: ${ep.checkCode}`,
+      `  账号管理: ${ep.accounts}`,
       ``,
       `🌐 完整URL示例:`,
-      `  ${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.START_MONITOR}`,
+      `  ${API_CONFIG.BASE_URL}${ep.startMonitor}`,
     ];
-    
-    configLog.innerHTML = info.map(line => `<div>${line}</div>`).join('');
+
+    // 决策理由：使用 DOM API 替代 innerHTML 拼接，避免任何字段反射注入风险
+    const fragment = document.createDocumentFragment();
+    for (const line of info) {
+      const div = document.createElement('div');
+      div.textContent = line;
+      fragment.appendChild(div);
+    }
+    configLog.replaceChildren(fragment);
   }
   
   /**
@@ -592,7 +602,7 @@ class SuperBrain {
     const testLog = document.getElementById('debug-test');
     const solutionLog = document.getElementById('debug-solution');
     
-    testLog.innerHTML = '<div>🔄 开始测试云端API...</div>';
+    testLog.innerHTML = '<div>🔄 开始测试关键链路...</div>';
     solutionLog.innerHTML = '';
     
     const log = (msg, isError = false) => {
@@ -603,17 +613,13 @@ class SuperBrain {
       testLog.scrollTop = testLog.scrollHeight;
     };
     
-    log(`[${new Date().toLocaleTimeString()}] 📤 调用云端API...`);
+    log(`[${new Date().toLocaleTimeString()}] 📤 调用关键链路探测...`);
     log(`API地址: ${API_CONFIG.BASE_URL}`);
-    log(`测试邮箱: test@example.com`);
-    log(`测试会话: test-${Date.now()}`);
     
     const startTime = Date.now();
-    const testEmail = 'test@example.com';
-    const testSession = `test-${Date.now()}`;
     
     try {
-      const response = await apiClient.startMonitor(testEmail, testSession);
+      const response = await this.apiClient.smokeCheck();
       const elapsed = Date.now() - startTime;
       
       log('');
@@ -625,13 +631,13 @@ class SuperBrain {
       
       if (response.success) {
         solutionLog.innerHTML = `
-          <div style="color: #10b981; font-weight: 600;">✅ 云端API工作正常！</div>
-          <div style="margin-top: 8px;">API通信已建立，可以正常使用自动注册功能。</div>
+          <div style="color: #10b981; font-weight: 600;">✅ 关键链路工作正常</div>
+          <div style="margin-top: 8px;">健康检查、账号接口、监控接口和验证码接口都可用。</div>
         `;
       } else {
         solutionLog.innerHTML = `
-          <div style="color: #f59e0b; font-weight: 600;">⚠️ API返回失败</div>
-          <div style="margin-top: 8px;">API可访问但返回失败状态，请检查API服务器日志。</div>
+          <div style="color: #f59e0b; font-weight: 600;">⚠️ 链路探测返回异常</div>
+          <div style="margin-top: 8px;">至少有一个关键接口异常，请检查后端日志。</div>
         `;
       }
     } catch (error) {
@@ -644,143 +650,37 @@ class SuperBrain {
       log(`  ${error.message}`, true);
       log('');
       
-      // 分析错误并给出解决方案
+      // 分析错误并给出解决方案（仅限本项目实际涉及的链路）
+      const ep = this.protocolEndpoints;
       solutionLog.innerHTML = `
-        <div style="color: #ef4444; font-weight: 600;">🔴 问题：无法连接到云端API</div>
+        <div style="color: #ef4444; font-weight: 600;">🔴 问题：无法完成关键链路探测</div>
         <div style="margin-top: 8px;">可能原因:</div>
         <div style="margin-left: 16px;">
-          1. API服务器未运行<br>
-          2. Cloudflare Tunnel未连接<br>
-          3. 网络连接问题<br>
-          4. API地址配置错误
+          1. 本地后端未启动（start-backend.bat）<br>
+          2. 网络连接问题<br>
+          3. config.js 中 BASE_URL 与实际后端地址不一致<br>
+          4. 上游接口契约（windsurf 注册页）已变化
         </div>
         <div style="margin-top: 8px;">解决步骤:</div>
         <div style="margin-left: 16px;">
-          ✅ 联系服务提供者确认API服务器状态<br>
-          ✅ 检查config.js中的API_CONFIG.BASE_URL<br>
-          ✅ 尝试在浏览器直接访问: ${API_CONFIG.BASE_URL}/api/health
+          ✅ 确认 start-backend.bat 已运行，且没有错误日志<br>
+          ✅ 检查 extension/config.js 中的 API_CONFIG.BASE_URL<br>
+          ✅ 在浏览器直接访问: ${API_CONFIG.BASE_URL}${ep.health}<br>
+          ✅ 打开 Windsurf 注册页后重试 smoke check
         </div>
       `;
     }
   }
-  
-  /**
-   * 分析错误并给出解决方案
-   */
-  analyzeError(errorMessage, solutionLog) {
-    const solutions = [];
-    
-    if (errorMessage.includes('not found') || errorMessage.includes('host not found')) {
-      solutions.push({
-        title: '🔴 问题：找不到Native Messaging Host',
-        reasons: [
-          '1. 注册表未配置或配置错误',
-          '2. manifest.json文件路径不正确',
-          '3. Extension ID不匹配'
-        ],
-        steps: [
-          '✅ 步骤1: 打开 edge://extensions',
-          '   - 开启"开发人员模式"',
-          '   - 复制扩展的ID',
-          '',
-          '✅ 步骤2: 检查ID是否匹配',
-          `   - 当前扩展ID: ${chrome.runtime.id}`,
-          '   - 打开 backend/windsurf_email_monitor.json',
-          '   - 检查 allowed_origins 中的ID',
-          '',
-          '✅ 步骤3: 如果ID不匹配',
-          '   - 运行 backend/create_clean_manifest.py',
-          '   - 运行 backend/final_register.bat',
-          '   - 在地址栏输入: edge://restart',
-          '',
-          '✅ 步骤4: 验证配置',
-          '   - 运行 backend/verify_config.bat',
-          '   - 检查所有配置是否正确',
-        ]
-      });
-    } else if (errorMessage.includes('Access') || errorMessage.includes('forbidden')) {
-      solutions.push({
-        title: '🔴 问题：访问被拒绝',
-        reasons: [
-          '1. manifest.json中的permissions不正确',
-          '2. Extension ID不在allowed_origins中'
-        ],
-        steps: [
-          '✅ 检查 extension/manifest.json',
-          '   - 确认有 "nativeMessaging" 权限',
-          '',
-          '✅ 检查 backend/windsurf_email_monitor.json',
-          `   - allowed_origins 应包含: extension://${chrome.runtime.id}/`
-        ]
-      });
-    } else if (errorMessage.includes('exited')) {
-      solutions.push({
-        title: '🔴 问题：Native Host启动后立即退出',
-        reasons: [
-          '1. Python未安装或路径不正确',
-          '2. native_host.py有语法错误',
-          '3. 依赖包未安装'
-        ],
-        steps: [
-          '✅ 测试Python',
-          '   - 打开命令提示符',
-          '   - 运行: py --version',
-          '   - 应显示Python版本',
-          '',
-          '✅ 手动测试Native Host',
-          '   - cd backend',
-          '   - py test_native_host.py',
-          '   - 查看详细错误信息'
-        ]
-      });
-    } else {
-      solutions.push({
-        title: '🔴 未知错误',
-        reasons: ['请查看完整的错误消息'],
-        steps: [
-          '✅ 收集调试信息',
-          '   - 打开浏览器开发者工具 (F12)',
-          '   - 查看Console标签',
-          '   - 截图完整的错误信息',
-          '',
-          '✅ 手动测试',
-          '   - 运行 backend/test_native_host.py',
-          '   - 查看 backend/native_host.log'
-        ]
-      });
-    }
-    
-    // 渲染解决方案
-    solutionLog.innerHTML = solutions.map(solution => `
-      <div style="margin-bottom: 20px;">
-        <div style="font-weight: 600; color: #ef4444; margin-bottom: 8px;">${solution.title}</div>
-        <div style="margin-bottom: 8px; color: #f59e0b;">可能原因:</div>
-        ${solution.reasons.map(r => `<div style="margin-left: 12px; font-size: 12px;">${r}</div>`).join('')}
-        <div style="margin-top: 8px; margin-bottom: 8px; color: #10b981;">解决步骤:</div>
-        ${solution.steps.map(s => `<div style="margin-left: 12px; font-size: 12px; line-height: 1.6;">${s}</div>`).join('')}
-      </div>
-    `).join('');
-  }
-  
+
   /**
    * 执行解决方案
+   * 决策理由：本项目只走 HTTP API（非 native messaging），保留与
+   * generateRecommendations() 中实际使用的 action 对应的处理分支。
    */
   async executeSolution(action) {
     console.log('[SuperBrain] 执行解决方案:', action);
-    
+
     switch (action) {
-      case 'installNative':
-        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 install_native.bat', { title: '安装原生模块' });
-        break;
-
-      case 'startProxy':
-        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 启动代理.bat', { title: '启动代理' });
-        break;
-
-      case 'manual':
-        await ui.alert('请打开文件管理器，导航到 backend 文件夹，运行 启动监控.bat', { title: '启动监控' });
-        break;
-
       case 'reset': {
         const ok = await ui.confirm('确定要重置当前状态吗？', {
           title: '重置状态',
@@ -791,7 +691,6 @@ class SuperBrain {
           this.stateMachine.reset();
           await this.stateMachine.clearStorage();
           ui.toast('状态已重置', 'success');
-          // 略作延迟，让 toast 可见后再刷新
           setTimeout(() => location.reload(), 600);
         }
         break;
@@ -801,27 +700,40 @@ class SuperBrain {
         window.open(API_CONFIG.BASE_URL, '_blank');
         break;
 
+      case 'checkURL':
       case 'checkConfig':
-        await ui.alert('请检查 extension/config.js 中的 API_CONFIG 配置', { title: '检查配置' });
+        await ui.alert('请检查 extension/config.js 中的 API_CONFIG.BASE_URL 是否正确指向后端地址', { title: '检查配置' });
         break;
 
       case 'checkPermissions':
         await ui.alert('请检查 extension/manifest.json 中的 host_permissions 是否包含 API 域名', { title: '检查权限' });
         break;
 
+      case 'openRegisterPage':
+        chrome.tabs.create({ url: this.upstream.registerUrl });
+        break;
+
+      case 'checkDebug':
+        await this.showDebugPanel();
+        break;
+
+      case 'contactAdmin':
+        await ui.alert('请联系作者或在 GitHub 提交 Issue：https://github.com/bjfwan/windsurf-helper-opensource/issues', { title: '联系作者' });
+        break;
+
       default:
-        console.warn('未知操作:', action);
+        console.warn('[SuperBrain] 未知 action:', action);
     }
   }
   
   /**
-   * 测试云端API调用
+   * 测试关键链路
    */
   async testAPICall() {
     const testSession = 'test-' + Date.now();
     const result = await ui.confirm(
-      `将调用 /api/start-monitor 接口\n邮箱: test@example.com\n会话 ID: ${testSession}\n\n点击确定开始测试`,
-      { title: '测试云端 API', confirmText: '开始测试' }
+      `将执行健康检查、账号接口、监控接口和验证码接口的 smoke check\n\n测试会话 ID: ${testSession}`,
+      { title: '测试关键链路', confirmText: '开始测试' }
     );
 
     if (!result) return;
@@ -829,19 +741,17 @@ class SuperBrain {
     try {
       console.log('[SuperBrain] 开始测试API调用');
       console.log('[SuperBrain] API_CONFIG:', API_CONFIG);
-      console.log('[SuperBrain] apiClient:', typeof apiClient);
+      console.log('[SuperBrain] apiClient:', this.apiClient ? '已初始化' : '未初始化');
 
-      const testEmail = 'test@example.com';
-
-      console.log('[SuperBrain] 调用 apiClient.startMonitor');
-      const response = await apiClient.startMonitor(testEmail, testSession);
+      console.log('[SuperBrain] 调用 apiClient.smokeCheck');
+      const response = await this.apiClient.smokeCheck();
 
       console.log('[SuperBrain] API响应:', response);
 
       if (response.success) {
-        await ui.alert(JSON.stringify(response, null, 2), { title: '✅ API 调用成功' });
+        await ui.alert(JSON.stringify(response, null, 2), { title: '✅ 链路测试成功' });
       } else {
-        await ui.alert(JSON.stringify(response, null, 2), { title: '⚠️ API 返回失败' });
+        await ui.alert(JSON.stringify(response, null, 2), { title: '⚠️ 链路测试异常' });
       }
     } catch (error) {
       console.error('[SuperBrain] API调用失败:', error);

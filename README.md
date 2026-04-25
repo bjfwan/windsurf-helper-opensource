@@ -30,7 +30,7 @@
 | **数据存储** | 浏览器 IndexedDB | IndexedDB + 本地 JSON |
 | **适用场景** | 快速试用 | 长期使用 |
 
-> 💡 两种模式任选一，插件默认读取 `extension/email-config.js` 中的 `mode` 字段决定走哪条路径。临时邮箱模式无需后端；本地后端模式需同时启动 `backend/` 下的 Node 服务。
+> 💡 两种模式任选一，插件默认读取 `extension/email-config.js` 中的 `provider` 字段决定走哪条路径（兼容旧字段 `mode`）。临时邮箱模式无需后端；本地后端模式需同时启动 `backend/` 下的 Node 服务。
 
 ---
 
@@ -75,7 +75,7 @@ cd windsurf-helper-opensource
 编辑 `extension/email-config.js`：
 
 ```js
-const EMAIL_MODE = 'temp-mail';
+const EMAIL_PROVIDER = 'temp-mail';
 ```
 
 **配置步骤**：参考 [临时邮箱配置指南](./docs/temp-mail-setup.md)
@@ -96,7 +96,7 @@ const EMAIL_MODE = 'temp-mail';
 编辑 `extension/email-config.js`：
 
 ```js
-const EMAIL_MODE = 'qq-imap';
+const EMAIL_PROVIDER = 'qq-imap';
 ```
 
 完整 IMAP / Cloudflare 配置见 [本地后端配置指南](./docs/self-hosted-api.md)。
@@ -159,27 +159,29 @@ cp extension/config.example.js extension/config.js
 编辑 `extension/email-config.js`：
 
 ```javascript
-// ==================== 选择模式 ====================
-const EMAIL_MODE = 'temp-mail';  // 临时邮箱模式
+// ==================== 选择来源 ====================
+const EMAIL_PROVIDER = 'temp-mail';  // 临时邮箱模式
 
 // ==================== 临时邮箱配置 ====================
 const TEMP_MAIL_CONFIG = {
-  provider: 'your-service',  // 您集成的服务名称
+  provider: 'your-service',  // 子服务名称（1secmail / guerrilla-mail / ...）
   pollInterval: 5000,        // 轮询间隔：5秒
   maxAttempts: 60            // 最大尝试次数：60次（5分钟）
 };
 
 // ==================== 导出配置 ====================
 const EMAIL_CONFIG = {
-  mode: EMAIL_MODE,
+  provider: EMAIL_PROVIDER,
   tempMail: TEMP_MAIL_CONFIG,
   qqImap: QQ_IMAP_CONFIG,
-  
+
+  // 兼容旧字段
+  get mode() { return this.provider; },
   get prefix() {
-    return this.mode === 'temp-mail' ? 'windsurf' : this.qqImap.emailPrefix;
+    return this.provider === 'temp-mail' ? 'windsurf' : this.qqImap.emailPrefix;
   },
   get domain() {
-    return this.mode === 'temp-mail' ? 'tempr.email' : this.qqImap.domain;
+    return this.provider === 'temp-mail' ? 'tempr.email' : this.qqImap.domain;
   }
 };
 ```
@@ -189,8 +191,8 @@ const EMAIL_CONFIG = {
 编辑 `extension/email-config.js`：
 
 ```javascript
-// ==================== 选择模式 ====================
-const EMAIL_MODE = 'qq-imap';  // 本地后端模式
+// ==================== 选择来源 ====================
+const EMAIL_PROVIDER = 'qq-imap';  // 本地后端模式
 
 // ==================== 邮箱配置 ====================
 const QQ_IMAP_CONFIG = {

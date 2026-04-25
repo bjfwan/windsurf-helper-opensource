@@ -1,32 +1,50 @@
 console.log('[Windsurf Helper] Content script loaded (v2.0)');
 
+const upstreamContract = typeof WindsurfProtocol !== 'undefined' && WindsurfProtocol.upstream
+  ? WindsurfProtocol.upstream
+  : {
+      registerUrl: 'https://windsurf.com/account/register',
+      standardPatterns: ['windsurf.com/account/register'],
+      oauthPatterns: ['windsurf.com/windsurf/signin', 'workflow=onboarding', 'prompt=login'],
+      selectors: {
+        step1Inputs: 'input[type="text"], input[type="email"]',
+        textInputs: 'input[type="text"]',
+        emailInputs: 'input[type="email"]',
+        passwordInputs: 'input[type="password"]',
+        termsCheckbox: 'input[type="checkbox"]',
+        verificationInputs: 'input[name="code"], input[name="verificationCode"]',
+        buttons: 'button',
+        enabledButtons: 'button:not([disabled])',
+        submitButtons: 'button[type="submit"]'
+      },
+      buttonKeywords: {
+        continue: ['继续', 'Continue', '下一步', 'Next'],
+        submit: ['注册', 'Register', '创建', 'Create', '提交', 'Submit']
+      },
+      smoke: {
+        step1MinInputs: 3,
+        step2MinPasswordInputs: 2,
+        oauthMinNameInputs: 2
+      },
+      countMatches(url = '', patterns = []) {
+        return patterns.filter(pattern => url.includes(pattern)).length;
+      },
+      isRegistrationUrl(url = '') {
+        if (!url) {
+          return false;
+        }
+        if (this.standardPatterns.some(pattern => url.includes(pattern))) {
+          return true;
+        }
+        return this.countMatches(url, this.oauthPatterns) >= 2;
+      },
+      includesKeyword(text = '', keywords = []) {
+        return keywords.some(keyword => text.includes(keyword));
+      }
+    };
+
 function isWindsurfRegistrationPage(url) {
-  if (!url) return false;
-  
-  const standardPatterns = [
-    'windsurf.com/account/register'
-  ];
-  
-  const oauthPatterns = [
-    'windsurf.com/windsurf/signin',
-    'workflow=onboarding',
-    'prompt=login'
-  ];
-  
-  for (const pattern of standardPatterns) {
-    if (url.includes(pattern)) {
-      return true;
-    }
-  }
-  
-  let oauthMatchCount = 0;
-  for (const pattern of oauthPatterns) {
-    if (url.includes(pattern)) {
-      oauthMatchCount++;
-    }
-  }
-  
-  return oauthMatchCount >= 2;
+  return upstreamContract.isRegistrationUrl(url);
 }
 
 const CONFIG = {
@@ -34,6 +52,8 @@ const CONFIG = {
   ELEMENT_CHECK_INTERVAL: 100,
   MAX_RETRY_ATTEMPTS: 3,
   RETRY_DELAY: 2000,
+  // 决策理由：字段名沿用 CLOUDFLARE_TIMEOUT 是为了向后兼容，
+  // 实际语义是"等提交按钮启用的最大时间"——CF 只是其中一种触发原因。
   CLOUDFLARE_TIMEOUT: 30000
 };
 
@@ -155,8 +175,8 @@ function detectCurrentStep() {
   console.log('[Content] 检测页面:', url);
   
   if (isWindsurfRegistrationPage(url)) {
-    const passwordInputs = document.querySelectorAll('input[type="password"]');
-    const textInputs = document.querySelectorAll('input[type="text"], input[type="email"]');
+    const passwordInputs = document.querySelectorAll(upstreamContract.selectors.passwordInputs);
+    const textInputs = document.querySelectorAll(upstreamContract.selectors.step1Inputs);
     
     if (passwordInputs.length >= 2) {
       return 'step2';
@@ -176,9 +196,9 @@ function detectOAuthPageStep() {
   if (url.includes('windsurf.com/windsurf/signin') && 
       url.includes('workflow=onboarding')) {
     
-    const emailInputs = document.querySelectorAll('input[type="email"]');
-    const passwordInputs = document.querySelectorAll('input[type="password"]');
-    const textInputs = document.querySelectorAll('input[type="text"]');
+    const emailInputs = document.querySelectorAll(upstreamContract.selectors.emailInputs);
+    const passwordInputs = document.querySelectorAll(upstreamContract.selectors.passwordInputs);
+    const textInputs = document.querySelectorAll(upstreamContract.selectors.textInputs);
     
     if (emailInputs.length > 0 && passwordInputs.length > 0) {
       return 'oauth_full';
@@ -196,9 +216,56 @@ function detectOAuthPageStep() {
   return 'unknown';
 }
 
+function findButtonByKeywords(keywords, selector = upstreamContract.selectors.buttons) {
+  return Array.from(document.querySelectorAll(selector)).find(btn =>
+    upstreamContract.includesKeyword((btn.textContent || '').trim(), keywords)
+  ) || null;
+}
+
+function runSmokeCheck() {
+  const step = detectCurrentStep();
+  const counts = {
+    step1Inputs: document.querySelectorAll(upstreamContract.selectors.step1Inputs).length,
+    textInputs: document.querySelectorAll(upstreamContract.selectors.textInputs).length,
+    emailInputs: document.querySelectorAll(upstreamContract.selectors.emailInputs).length,
+    passwordInputs: document.querySelectorAll(upstreamContract.selectors.passwordInputs).length,
+    termsCheckbox: document.querySelectorAll(upstreamContract.selectors.termsCheckbox).length,
+    buttons: document.querySelectorAll(upstreamContract.selectors.buttons).length
+  };
+  const continueButton = findButtonByKeywords(upstreamContract.buttonKeywords.continue);
+  const submitButton = findButtonByKeywords(upstreamContract.buttonKeywords.submit);
+  const url = window.location.href;
+  const urlMatched = upstreamContract.isRegistrationUrl(url);
+
+  let success = false;
+  if (step === 'step1') {
+    success = urlMatched && counts.step1Inputs >= upstreamContract.smoke.step1MinInputs && !!continueButton;
+  } else if (step === 'step2') {
+    success = urlMatched && counts.passwordInputs >= upstreamContract.smoke.step2MinPasswordInputs;
+  } else if (step === 'oauth_email') {
+    success = urlMatched && counts.emailInputs >= 1 && !!continueButton;
+  } else if (step === 'oauth_name') {
+    success = urlMatched && counts.textInputs >= upstreamContract.smoke.oauthMinNameInputs && !!continueButton;
+  } else if (step === 'oauth_full') {
+    success = urlMatched && counts.emailInputs >= 1 && counts.passwordInputs >= 1 && !!(continueButton || submitButton);
+  }
+
+  return {
+    success,
+    url,
+    urlMatched,
+    step,
+    counts,
+    selectors: {
+      continueButton: !!continueButton,
+      submitButton: !!submitButton
+    }
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[Content] 收到消息:', message);
-  
+
   if (message.action === 'fillForm') {
     handleFillForm(message.data).then(result => {
       sendResponse(result);
@@ -207,13 +274,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   } else if (message.action === 'fillVerificationCode') {
-    fillVerificationCode(message.code);
-    sendResponse({ success: true });
+    // 决策理由：填充流程包含 setTimeout 等待按钮启用，需要异步返回结果
+    fillVerificationCode(message.code, message.options || {})
+      .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
   } else if (message.action === 'detectStep') {
     const step = detectCurrentStep();
     sendResponse({ success: true, step });
+  } else if (message.action === 'smokeCheck') {
+    sendResponse({ success: true, data: runSmokeCheck() });
   }
-  
+
   return true;
 });
 
@@ -273,7 +345,7 @@ async function fillStep1(data) {
   
   await new Promise(resolve => setTimeout(resolve, 500));
   
-  const inputs = document.querySelectorAll('input[type="text"], input[type="email"]');
+  const inputs = document.querySelectorAll(upstreamContract.selectors.step1Inputs);
   if (inputs.length < 3) {
     throw new Error('输入框数量不足');
   }
@@ -290,7 +362,7 @@ async function fillStep1(data) {
   }
   await new Promise(resolve => setTimeout(resolve, 300));
   
-  const emailInput = document.querySelector('input[type="email"]') || inputs[2];
+  const emailInput = document.querySelector(upstreamContract.selectors.emailInputs) || inputs[2];
   if (!safelyFillInput(emailInput, data.email)) {
     throw new Error('填充邮箱失败');
   }
@@ -311,7 +383,7 @@ async function fillStep1(data) {
 
 async function checkTermsCheckbox() {
   try {
-    const checkbox = await waitForElement('input[type="checkbox"]', 5000);
+    const checkbox = await waitForElement(upstreamContract.selectors.termsCheckbox, 5000);
     if (checkbox && !checkbox.checked) {
       checkbox.click();
       console.log('[Content] 已勾选同意条款');
@@ -326,10 +398,9 @@ async function clickContinueButton() {
   try {
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    const buttons = Array.from(document.querySelectorAll('button:not([disabled])'));
-    const continueBtn = buttons.find(btn => 
-      btn.textContent.includes('继续') || 
-      btn.textContent.includes('Continue')
+    const continueBtn = findButtonByKeywords(
+      upstreamContract.buttonKeywords.continue,
+      upstreamContract.selectors.enabledButtons
     );
     
     if (continueBtn) {
@@ -362,72 +433,149 @@ async function fillStep2WithRetry(data, attemptCount = 0) {
 
 async function fillStep2(data) {
   console.log('[Content] 执行步骤2填充');
-  
+
   await new Promise(resolve => setTimeout(resolve, 800));
-  
-  const passwordInputs = document.querySelectorAll('input[type="password"]');
+
+  const passwordInputs = document.querySelectorAll(upstreamContract.selectors.passwordInputs);
   if (passwordInputs.length < 2) {
     throw new Error('密码输入框数量不足');
   }
-  
+
   if (!safelyFillInput(passwordInputs[0], data.password)) {
     throw new Error('填充密码失败');
   }
   await new Promise(resolve => setTimeout(resolve, 400));
-  
+
   if (!safelyFillInput(passwordInputs[1], data.password)) {
     throw new Error('填充密码确认失败');
   }
   await new Promise(resolve => setTimeout(resolve, 500));
-  
-  console.log('[Content] 步骤2完成，等待Cloudflare验证...');
-  
-  waitForCloudflareAndSubmit();
+
+  // 决策理由：旧名 waitForCloudflareAndSubmit 是误导——实际等的是任何让按钮启用
+  // 的条件（CF / 表单校验 / 页面加载）。改名后语义诚实，并在内部区分原因。
+  console.log('[Content] 步骤2填充完成，等待提交按钮启用...');
+  waitForSubmitButtonAndSubmit();
 }
 
-function waitForCloudflareAndSubmit() {
-  console.log('[Content] 开始监听Cloudflare验证状态...');
-  
-  const checkInterval = setInterval(() => {
-    const buttons = Array.from(document.querySelectorAll('button:not([disabled])'));
-    const continueBtn = buttons.find(btn => 
-      btn.textContent.includes('继续') || 
-      btn.textContent.includes('Continue')
-    );
-    
-    if (continueBtn) {
+/**
+ * 探测页面上是否真的存在 Cloudflare Turnstile / Challenge 控件
+ * 决策理由：原代码把"按钮没启用"一律视为 Cloudflare 等待，导致大量误报。
+ * 这里通过 Cloudflare 自家 iframe 的 src / class / title 真正确认其存在。
+ */
+function detectCloudflareChallenge() {
+  const probes = [
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="turnstile"]',
+    'iframe[title*="Cloudflare"]',
+    'iframe[title*="cloudflare"]',
+    'iframe[title*="challenge"]',
+    '.cf-turnstile',
+    '#cf-chl-widget',
+    'div[data-sitekey][data-callback]'
+  ];
+  for (const selector of probes) {
+    if (document.querySelector(selector)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 等"继续/提交"按钮启用并自动点击。
+ * 决策理由：按钮 disabled 可能由以下任一原因导致——
+ *   1) Cloudflare 验证未通过
+ *   2) 表单字段还没通过校验（密码/条款）
+ *   3) 页面 React 还没刷新出可点击状态
+ * 函数会先探测 Cloudflare 是否真的出现，根据结果给出准确日志，
+ * 超时时再二次探测，避免输出"Cloudflare 等待中"的误导消息。
+ *
+ * 决策理由（资源管理）：
+ *   Windsurf 是 React SPA——提交后 URL 切到 /verify-code 但不卸载页面，
+ *   `beforeunload` / `visibilitychange` 都不会触发。如果只清 interval
+ *   不清 30s timeout，那个定时器会在 SPA 跳转后继续 tick，最终在新页面
+ *   里找不到 Step2 的按钮，错误地报"按钮未启用"。
+ *
+ *   用 cleanup() + cleanedUp 标志做互斥锁：成功 / 超时只能被触发一次，
+ *   并互相清理对方的定时器。
+ */
+function waitForSubmitButtonAndSubmit() {
+  const initiallyHasCf = detectCloudflareChallenge();
+  const initialReason = initiallyHasCf ? 'Cloudflare 验证' : '表单校验/页面就绪';
+  console.log(`[Content] 等待提交按钮启用（当前原因：${initialReason}）...`);
+
+  let timeoutHandle = null;
+  let cleanedUp = false;
+  let checkInterval = null;
+
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    if (checkInterval !== null) {
       clearInterval(checkInterval);
       removeFromActiveIntervals(checkInterval);
-      console.log('[Content] Cloudflare验证完成');
-      
+    }
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+      const idx = activeTimeouts.indexOf(timeoutHandle);
+      if (idx > -1) activeTimeouts.splice(idx, 1);
+      timeoutHandle = null;
+    }
+  };
+
+  checkInterval = setInterval(() => {
+    if (cleanedUp) return;
+    const continueBtn = findButtonByKeywords(
+      upstreamContract.buttonKeywords.continue,
+      upstreamContract.selectors.enabledButtons
+    );
+
+    if (continueBtn) {
+      const stillHasCf = detectCloudflareChallenge();
+      const successReason = initiallyHasCf
+        ? (stillHasCf ? 'Cloudflare 已通过（控件残留）' : 'Cloudflare 验证已通过')
+        : '表单校验通过';
+      console.log(`[Content] 按钮启用：${successReason}`);
+      cleanup(); // 关键：成功时同时清 30s 超时定时器
+
       const submitTimeout = setTimeout(() => {
         continueBtn.click();
         console.log('[Content] 已自动提交注册表单');
-        
         chrome.runtime.sendMessage({
           action: 'registrationSubmitted',
           success: true
         });
       }, 1000);
-      
+
       activeTimeouts.push(submitTimeout);
     }
   }, 1000);
-  
+
   activeIntervals.push(checkInterval);
-  
-  const timeoutHandler = setTimeout(() => {
-    clearInterval(checkInterval);
-    removeFromActiveIntervals(checkInterval);
-    console.log('[Content] Cloudflare验证等待中（需要手动完成）');
-    
-    chrome.runtime.sendMessage({
-      action: 'cloudflareWaiting',
-      message: '请手动完成Cloudflare验证'
-    });
+
+  timeoutHandle = setTimeout(() => {
+    if (cleanedUp) return;
+    cleanup();
+
+    const stillHasCf = detectCloudflareChallenge();
+    if (stillHasCf) {
+      console.log('[Content] 超时：Cloudflare 验证未通过，需要手动完成');
+      chrome.runtime.sendMessage({
+        action: 'cloudflareWaiting',
+        message: '请手动完成 Cloudflare 验证'
+      });
+    } else {
+      // 决策理由：诚实告诉用户"页面里根本没 Cloudflare，是别的原因"，
+      // 不再借 Cloudflare 之名甩锅。
+      console.log('[Content] 超时：未检测到 Cloudflare，按钮仍未启用，可能是表单字段未通过校验或页面未就绪');
+      chrome.runtime.sendMessage({
+        action: 'submitButtonDisabled',
+        message: '提交按钮长时间未启用，请检查：密码强度 / 条款勾选 / 页面是否加载完成'
+      });
+    }
   }, CONFIG.CLOUDFLARE_TIMEOUT);
-  
-  activeTimeouts.push(timeoutHandler);
+
+  activeTimeouts.push(timeoutHandle);
 }
 
 function removeFromActiveIntervals(interval) {
@@ -445,24 +593,166 @@ function cleanupTimers() {
   console.log('[Content] 已清理所有定时器');
 }
 
-function fillVerificationCode(code) {
-  console.log('[Content] 填充验证码:', code);
-  
-  const codeInput = document.querySelector('input[name="code"], input[name="verificationCode"]');
-  
-  if (codeInput) {
-    safelyFillInput(codeInput, code);
-    
-    const submitBtn = document.querySelector('button[type="submit"]');
-    if (submitBtn) {
-      setTimeout(() => {
-        submitBtn.click();
-        console.log('[Content] 已自动提交验证码');
-      }, 500);
-    }
-  } else {
-    console.warn('[Content] 未找到验证码输入框');
+/**
+ * 填充验证码到注册页面
+ *
+ * 决策理由：兼容两种 UI 形态——
+ *   1) 单输入框（旧版 input[name="code"]）
+ *   2) 6 段式 OTP（windsurf 当前形态：6 个 maxlength="1" 的 input，
+ *      第 1 个 autocomplete="one-time-code"，其余 autocomplete="off"）
+ *
+ * 默认行为：填充 + 自动点击"Create account"等提交按钮（沿用旧逻辑），
+ * 调用方传 { autoSubmit: false } 可只填不提交。
+ *
+ * 返回 { success, mode, filledCount, submitted, reason } 便于 popup 给用户准确反馈。
+ */
+async function fillVerificationCode(code, options = {}) {
+  const codeStr = String(code || '').trim();
+  const autoSubmit = options.autoSubmit !== false;
+  console.log(`[Content] 填充验证码: ${codeStr} (autoSubmit=${autoSubmit})`);
+
+  if (!codeStr) {
+    return { success: false, reason: '验证码为空' };
   }
+
+  // 1) 优先尝试 6 段式 OTP（windsurf 当前形态）
+  const segmented = locateSegmentedOtpInputs(codeStr.length);
+  if (segmented.length === codeStr.length) {
+    fillSegmentedOtp(segmented, codeStr);
+    const submitted = autoSubmit ? await tryAutoSubmitVerification() : false;
+    return {
+      success: true,
+      mode: 'segmented',
+      filledCount: segmented.length,
+      submitted
+    };
+  }
+
+  // 2) 退到单输入框（兼容旧 UI）
+  const codeInput = document.querySelector(upstreamContract.selectors.verificationInputs);
+  if (codeInput) {
+    safelyFillInput(codeInput, codeStr);
+    const submitted = autoSubmit ? await tryAutoSubmitVerification() : false;
+    return {
+      success: true,
+      mode: 'single',
+      filledCount: 1,
+      submitted
+    };
+  }
+
+  console.warn('[Content] 未找到验证码输入框（既无 6 段 OTP 也无单输入框）');
+  return { success: false, reason: '未找到验证码输入框' };
+}
+
+/**
+ * 找出页面上紧邻分组、长度等于验证码位数的 OTP 输入框组。
+ * 决策理由：页面上可能还有其它 maxlength="1" 输入框（如生日选择），
+ * 必须按"同一父级 + 数量恰好等于验证码位数"来确定是验证码组。
+ */
+function locateSegmentedOtpInputs(expectedLen = 6) {
+  const candidates = Array.from(document.querySelectorAll(
+    upstreamContract.selectors.otpSegmentedInputs
+  )).filter(input => {
+    // 排除被禁用 / 隐藏的输入框
+    if (input.disabled || input.readOnly) return false;
+    if (input.type === 'hidden') return false;
+    return true;
+  });
+
+  if (candidates.length === 0) return [];
+
+  // 决策理由：按 parentElement 分组，挑选数量等于（或最接近）期望位数的那一组
+  const groups = new Map();
+  for (const input of candidates) {
+    const parent = input.parentElement;
+    if (!parent) continue;
+    if (!groups.has(parent)) groups.set(parent, []);
+    groups.get(parent).push(input);
+  }
+
+  // 优先返回长度刚好 == expectedLen 的分组
+  for (const inputs of groups.values()) {
+    if (inputs.length === expectedLen) {
+      return inputs;
+    }
+  }
+
+  // 没有完全匹配的，返回最接近的（取最大且 <= expectedLen）
+  let best = [];
+  for (const inputs of groups.values()) {
+    if (inputs.length > best.length && inputs.length <= expectedLen) {
+      best = inputs;
+    }
+  }
+  return best;
+}
+
+/**
+ * 把 N 位验证码逐位填到 N 个独立输入框，并触发递进事件。
+ * 决策理由：很多 React/Vue OTP 组件监听 input 事件做"自动跳到下一个框"，
+ * 我们必须模拟"逐个键入"的事件序列才能让组件状态正确更新。
+ */
+function fillSegmentedOtp(inputs, code) {
+  console.log(`[Content] 6 段式 OTP 填充: ${code} -> ${inputs.length} 个输入框`);
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value'
+  ).set;
+
+  for (let i = 0; i < inputs.length; i++) {
+    const input = inputs[i];
+    const digit = code[i];
+
+    // 1) 聚焦
+    input.focus();
+
+    // 2) 用原生 setter 写值，绕过 React 的 setState 拦截
+    nativeSetter.call(input, digit);
+
+    // 3) 模拟键盘输入事件序列，触发 React onChange + 自动跳转焦点
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: digit }));
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: digit }));
+    input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: digit }));
+  }
+
+  // 4) 最后失焦让校验逻辑跑一次
+  const last = inputs[inputs.length - 1];
+  if (last) {
+    last.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+}
+
+/**
+ * 找"Create account"等提交按钮并点击。
+ * 决策理由：等按钮启用最多 1.5s，避免在页面校验完成前点击导致按钮 disabled 无效。
+ */
+async function tryAutoSubmitVerification() {
+  const maxWaitMs = 1500;
+  const checkIntervalMs = 100;
+  const start = Date.now();
+
+  while (Date.now() - start < maxWaitMs) {
+    const btn = findButtonByKeywords(
+      upstreamContract.buttonKeywords.submit,
+      upstreamContract.selectors.enabledButtons
+    ) || document.querySelector(`${upstreamContract.selectors.submitButtons}:not([disabled])`);
+
+    if (btn && !btn.disabled) {
+      // 留 200ms 让页面状态稳定（部分组件 enable 后会重渲）
+      await new Promise(resolve => setTimeout(resolve, 200));
+      btn.click();
+      console.log('[Content] 已自动点击提交按钮:', btn.textContent?.trim());
+      return true;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+  }
+
+  console.log('[Content] 等待提交按钮启用超时，跳过自动提交');
+  return false;
 }
 async function fillOAuthFull(data) {
   console.log('[Content] 执行OAuth完整页面填充');
@@ -471,7 +761,7 @@ async function fillOAuthFull(data) {
   
   const { firstName, lastName } = generateRealName();
   
-  const textInputs = document.querySelectorAll('input[type="text"]');
+  const textInputs = document.querySelectorAll(upstreamContract.selectors.textInputs);
   if (textInputs.length >= 2) {
     if (!safelyFillInput(textInputs[0], firstName)) {
       throw new Error('填充名字失败');
@@ -484,7 +774,7 @@ async function fillOAuthFull(data) {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
   
-  const emailInput = document.querySelector('input[type="email"]');
+  const emailInput = document.querySelector(upstreamContract.selectors.emailInputs);
   if (emailInput) {
     if (!safelyFillInput(emailInput, data.email)) {
       throw new Error('填充邮箱失败');
@@ -492,7 +782,7 @@ async function fillOAuthFull(data) {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
   
-  const passwordInputs = document.querySelectorAll('input[type="password"]');
+  const passwordInputs = document.querySelectorAll(upstreamContract.selectors.passwordInputs);
   if (passwordInputs.length >= 1) {
     if (!safelyFillInput(passwordInputs[0], data.password)) {
       throw new Error('填充密码失败');
@@ -527,7 +817,7 @@ async function fillOAuthEmail(data) {
   
   await new Promise(resolve => setTimeout(resolve, 500));
   
-  const emailInput = document.querySelector('input[type="email"]');
+  const emailInput = document.querySelector(upstreamContract.selectors.emailInputs);
   if (emailInput) {
     if (!safelyFillInput(emailInput, data.email)) {
       throw new Error('填充邮箱失败');
@@ -563,7 +853,7 @@ async function fillOAuthName(data) {
   
   const { firstName, lastName } = generateRealName();
   
-  const textInputs = document.querySelectorAll('input[type="text"]');
+  const textInputs = document.querySelectorAll(upstreamContract.selectors.textInputs);
   if (textInputs.length >= 2) {
     if (!safelyFillInput(textInputs[0], firstName)) {
       throw new Error('填充名字失败');
@@ -585,12 +875,9 @@ async function clickOAuthContinueButton() {
   try {
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    const buttons = Array.from(document.querySelectorAll('button:not([disabled])'));
-    const continueBtn = buttons.find(btn => 
-      btn.textContent.includes('继续') || 
-      btn.textContent.includes('Continue') ||
-      btn.textContent.includes('下一步') ||
-      btn.textContent.includes('Next')
+    const continueBtn = findButtonByKeywords(
+      upstreamContract.buttonKeywords.continue,
+      upstreamContract.selectors.enabledButtons
     );
     
     if (continueBtn) {
@@ -609,14 +896,9 @@ async function clickOAuthSubmitButton() {
   try {
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    const buttons = Array.from(document.querySelectorAll('button:not([disabled])'));
-    const submitBtn = buttons.find(btn => 
-      btn.textContent.includes('注册') || 
-      btn.textContent.includes('Register') ||
-      btn.textContent.includes('创建') ||
-      btn.textContent.includes('Create') ||
-      btn.textContent.includes('提交') ||
-      btn.textContent.includes('Submit')
+    const submitBtn = findButtonByKeywords(
+      upstreamContract.buttonKeywords.submit,
+      upstreamContract.selectors.enabledButtons
     );
     
     if (submitBtn) {

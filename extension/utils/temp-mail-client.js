@@ -223,6 +223,48 @@ class TempMailClient {
     return await response.json();
   }
 
+  async confirmVerificationCode(expectedCode = null) {
+    const mails = await this.checkMails();
+
+    for (const mail of mails) {
+      let mailContent = mail;
+      if (this.provider === '1secmail' || this.provider === 'temp-mail-org') {
+        const fullMail = await this.get1SecMailContent(mail.id);
+        if (fullMail) {
+          mailContent = fullMail;
+        }
+      }
+
+      const subject = mailContent.subject || mailContent.mail_subject || '';
+      const body = mailContent.body || mailContent.textBody || mailContent.htmlBody || mailContent.mail_body || mailContent.mail_text || '';
+      const from = mailContent.from || mailContent.mail_from || '';
+      const isTargetMail =
+        from.toLowerCase().includes('windsurf') ||
+        from.toLowerCase().includes('codeium') ||
+        subject.toLowerCase().includes('windsurf') ||
+        subject.toLowerCase().includes('verification');
+
+      if (!isTargetMail) {
+        continue;
+      }
+
+      const code = this.extractVerificationCode(body);
+      if (code && (!expectedCode || code === expectedCode)) {
+        return {
+          confirmed: true,
+          code,
+          mail: mailContent
+        };
+      }
+    }
+
+    return {
+      confirmed: false,
+      code: '',
+      reason: expectedCode ? '未找到匹配验证码' : '未找到验证码邮件'
+    };
+  }
+
   /**
    * 轮询等待验证码
    */

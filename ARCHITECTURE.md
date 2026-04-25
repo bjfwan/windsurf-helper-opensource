@@ -27,15 +27,23 @@ extension/
 └── utils/
     ├── logger.js              # 分级日志器（必须最先加载）
     ├── ui-toast.js            # Toast / Modal / 确认框组件
-    ├── api-client.js          # 与 serverless API 通信
-    ├── state-machine.js       # 注册流程状态机
+    ├── api-client.js          # 与本地/云端后端通信
+    ├── state-machine.js       # 注册流程状态机（含 VERIFYING_RESULT 中间态）
     ├── state-sync.js          # 跨上下文状态同步（按需心跳）
     ├── temp-mail-client.js    # 临时邮箱 API 客户端
     ├── db-manager.js          # IndexedDB 封装
     ├── analytics.js           # 注册成功率统计
     ├── email-generator.js     # 邮箱 / 用户名 / 密码生成
+    ├── email-provider.js      # 邮箱来源（temp-mail / qq-imap）抽象
     ├── smart-validator.js     # 启动前环境检查
-    └── super-brain.js         # 智能诊断面板
+    ├── registration-verifier.js  # 注册结果独立核验（backend / mailbox / local）
+    ├── upstream-probe.js      # 上游变更探测（关键链路 smoke check）
+    └── super-brain.js         # 智能诊断面板（消费 UpstreamProbe 报告）
+
+extension/protocol-contract.js
+                               # 协议契约：客户端身份 / endpoints / headers /
+                               # 上游选择器与关键链路 / 邮箱 provider 字典 /
+                               # 注册结果核验策略
 ```
 
 ---
@@ -109,6 +117,29 @@ popup.startRegistration
 - `handleVerificationTimeout(retryFn, msg)` — 公共超时路径（决定重试 vs ERROR）
 - 两个流程（temp-mail / API）共用助手，避免行为分歧
 
+### 3.1 注册结果核验器（registration-verifier.js）
+- 决策理由：**不仅仅靠"页面状态 + 验证码字符串"判定成功**，还要在
+  独立来源（后端 `/api/accounts` / 临时邮箱原始邮件）二次确认。
+- 三个来源：
+  - `backend`  —— `apiClient.listAccounts({ email })`，对状态 + 验证码三向校验
+  - `mailbox`  —— `tempMailClient.confirmVerificationCode(expectedCode)`，按 from + 验证码二次匹配
+  - `local`    —— IndexedDB（仅用于降级证据）
+- 输出：`{ confirmed, degraded, source, code, attempts, backendAccount, mailboxResult, localAccount, reason }`
+  - `confirmed && !degraded`：强确认（独立来源命中）
+  - `confirmed &&  degraded`：降级确认（独立来源全部 skipped，本地数据自洽）
+  - `!confirmed`             ：核验失败 → 状态机进入 ERROR
+- 策略集中在 `WindsurfProtocol.verification`（retries / retryDelay / strongSources / allowDegraded）。
+
+### 3.2 上游变更探测器（upstream-probe.js）
+- 决策理由：**只跟踪能让流程完全断的少数关键链路**，不做全量接口/选择器接入。
+- 关键链路清单写在 `WindsurfProtocol.upstream.smokePaths`：
+  - `register-url`     — 注册页 URL 仍可识别
+  - `step1-inputs`     — Step1 至少 3 个输入框
+  - `step2-passwords`  — Step2 至少 2 个密码框
+  - `continue-button`  — 继续/提交按钮存在
+- 同时调用 `apiClient.smokeCheck()` 跑后端关键接口（health / accounts / start-monitor / check-code）
+- 报告一次性返回 `{ ok, summary, upstream, backend, paths }`，被 super-brain 直接消费
+
 ### 4. UI 安全
 - `accounts.js` 中 `escapeHtml` / `escapeAttr` 用于所有从存储读取的字段拼接到 HTML
 - `popup.js displayVerificationCode` 用 DOM API 而非 `innerHTML` 拼接
@@ -126,12 +157,13 @@ popup.startRegistration
 每个 HTML 入口必须按以下顺序加载：
 1. `utils/logger.js` — 提供 `logger` 全局
 2. `utils/ui-toast.js` — 提供 `ui` 全局
-3. 配置文件（`email-config.js`, `config.js`）
-4. 工具库（utils/*）
-5. 业务脚本（popup.js / accounts.js / stats.js）
+3. `protocol-contract.js` — 提供 `WindsurfProtocol` 全局（必须早于配置文件）
+4. 配置文件（`email-config.js`, `config.js`）— 内部会读 `WindsurfProtocol.client`
+5. 工具库（utils/*）— `email-provider.js` / `api-client.js` / `registration-verifier.js` / `upstream-probe.js` / `super-brain.js`
+6. 业务脚本（popup.js / accounts.js / stats.js）
 
 `service-worker.js` 通过 `importScripts` 加载相同顺序。
-`content-script.js` 通过 manifest `content_scripts.js` 数组顺序加载。
+`content-script.js` 通过 manifest `content_scripts.js` 数组顺序加载（顺序为 `protocol-contract.js` → `utils/logger.js` → `content/content-script.js`）。
 
 ---
 

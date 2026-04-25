@@ -4,22 +4,44 @@ let realtimeChannel = null;
 let stateMachine = null;
 let smartValidator = null;
 let superBrain = null;
+let registrationVerifier = null;
 let monitorCountdownHandle = null;
 let monitorDeadlineTs = 0;
+// 决策理由：注册流程开始时记录目标 tab id，验证码到手后定向投递自动填充消息，
+// 避免用户切到别的标签页后误填，或失去活跃 tab 上下文。
+let registrationTabId = null;
 
 // 邮箱模式配置
 let emailConfig = null;
 let tempMailClient = null;
+const upstreamContract = typeof WindsurfProtocol !== 'undefined' && WindsurfProtocol.upstream
+  ? WindsurfProtocol.upstream
+  : {
+      registerUrl: 'https://windsurf.com/account/register',
+      standardPatterns: ['windsurf.com/account/register'],
+      oauthPatterns: ['windsurf.com/windsurf/signin', 'workflow=onboarding', 'prompt=login'],
+      countMatches(url = '', patterns = []) {
+        return patterns.filter(pattern => url.includes(pattern)).length;
+      },
+      isRegistrationUrl(url = '') {
+        if (!url) {
+          return false;
+        }
+        if (this.standardPatterns.some(pattern => url.includes(pattern))) {
+          return true;
+        }
+        return this.countMatches(url, this.oauthPatterns) >= 2;
+      }
+    };
 
 // 尝试加载配置文件
 try {
   if (typeof EMAIL_CONFIG !== 'undefined') {
     emailConfig = EMAIL_CONFIG;
-    console.log('[模式] 配置已加载:', emailConfig.mode);
-    
-    // 如果是临时邮箱模式，初始化客户端
-    if (emailConfig.mode === 'temp-mail' && typeof TempMailClient !== 'undefined') {
-      tempMailClient = new TempMailClient(emailConfig.tempMail);
+    console.log('[模式] 配置已加载:', getEmailProviderName(emailConfig));
+
+    if (isTempMailProvider(emailConfig)) {
+      tempMailClient = createTempMailClient(emailConfig);
       console.log('[临时邮箱] 客户端已初始化');
     }
   } else {
@@ -34,50 +56,141 @@ try {
  * 支持多种注册页面URL格式
  */
 function isWindsurfRegistrationPage(url) {
-  if (!url) return false;
-  
-  // 标准注册页面
-  const standardPatterns = [
-    'windsurf.com/account/register'
-  ];
-  
-  // OAuth/Onboarding注册页面
-  const oauthPatterns = [
-    'windsurf.com/windsurf/signin',
-    'workflow=onboarding',
-    'prompt=login'
-  ];
-  
-  // 检查标准注册页面
-  for (const pattern of standardPatterns) {
-    if (url.includes(pattern)) {
-      return true;
-    }
-  }
-  
-  // 检查OAuth注册页面（需要同时满足多个条件）
-  let oauthMatchCount = 0;
-  for (const pattern of oauthPatterns) {
-    if (url.includes(pattern)) {
-      oauthMatchCount++;
-    }
-  }
-  
-  // OAuth页面需要匹配至少2个条件才认为是注册页面
-  return oauthMatchCount >= 2;
+  return upstreamContract.isRegistrationUrl(url);
 }
 
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
-  // 决策理由：等待异步初始化完成，避免竞态条件
-  await initSupabase();
+  await initRuntimeClients();
   await initStateSyncAndAnalytics();
   initStateMachine();
   setupEventListeners();
+  setupBackgroundMessageListener();
   await checkAndRestoreState();
+  await pickupBackgroundCachedCode();
   log('✅ 插件已加载 (v2.1 - 优化版)');
   updateStatus('idle', '就绪');
 });
+
+/**
+ * 监听 service-worker 推送的验证码事件
+ *
+ * 决策理由：
+ *   SW 真正负责轮询，popup 只在打开时才能听到这些消息；关闭时由 storage 兜底。
+ *
+ * 防误投递（关键）：
+ *   1) 必须严格匹配本地+远端 sessionId（之前只在两者都存在且不等时才丢弃，
+ *      ERROR 状态下本地 sessionId 是 undefined，会让任何 SW 残留消息都被处理）
+ *   2) ERROR / IDLE / COMPLETED 状态下忽略迟到的验证码——这些状态意味着流程已结束
+ */
+function setupBackgroundMessageListener() {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || !message.action) return false;
+
+    if (message.action === 'codeReceived') {
+      const localSessionId = currentAccount?.session_id || stateMachine?.getMetadata()?.session_id;
+
+      // 严格匹配：缺一不可
+      if (!localSessionId || !message.sessionId || localSessionId !== message.sessionId) {
+        log(`⚠️ 忽略不匹配的验证码（local=${localSessionId || '空'} remote=${message.sessionId || '空'}）`, 'warning');
+        sendResponse({ ignored: true, reason: 'sessionId mismatch' });
+        return false;
+      }
+
+      // 状态检查：流程已结束的话，迟到的验证码大概率是上一轮残留
+      const state = stateMachine?.getState();
+      const ignoredStates = [
+        RegistrationStateMachine.STATES.ERROR,
+        RegistrationStateMachine.STATES.IDLE,
+        RegistrationStateMachine.STATES.COMPLETED
+      ];
+      if (ignoredStates.includes(state)) {
+        log(`⚠️ 当前状态 ${state}，忽略迟到的验证码 ${message.code}`, 'warning');
+        sendResponse({ ignored: true, reason: state });
+        return false;
+      }
+
+      log(`📨 收到后台投递的验证码: ${message.code}`);
+      handleVerificationCodeReceived(message.code, {
+        sourceTag: '后台投递',
+        updateCloud: !!currentAccount && !isTempMailProvider(emailConfig),
+        email: message.email
+      }).catch(err => logger.error('[BG-Msg] handleVerificationCodeReceived 失败:', err));
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (message.action === 'codeTimeout') {
+      const localSessionId = currentAccount?.session_id || stateMachine?.getMetadata()?.session_id;
+      if (!localSessionId || !message.sessionId || localSessionId !== message.sessionId) {
+        return false; // 静默忽略——超时也得是给当前会话的才有意义
+      }
+      log(`⏱️ 后台轮询超时（已尝试 ${message.attempts} 次）`, 'error');
+      stopRealtimeMonitoring();
+      handleVerificationTimeout(() => {
+        const mode = isTempMailProvider(emailConfig) ? 'temp-mail' : 'qq-imap';
+        if (mode === 'temp-mail') {
+          startTempMailMonitoring(message.email);
+        } else {
+          startRealtimeMonitoring(message.email);
+        }
+      }, '验证码获取超时');
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    return false;
+  });
+}
+
+/**
+ * popup 重新打开时，从 storage 读取 SW 在后台已经拿到的验证码
+ *
+ * 决策理由：popup 关闭期间 codeReceived runtime 消息会丢失，但 SW 把验证码
+ *          写入了 storage，这里补单恢复 UI 流程。
+ *
+ * 防误投递：与 setupBackgroundMessageListener 同理——流程已结束（ERROR/IDLE/COMPLETED）
+ *          的话，缓存的验证码视为残留并清理。
+ */
+async function pickupBackgroundCachedCode() {
+  try {
+    const sessionId = currentAccount?.session_id || stateMachine?.getMetadata()?.session_id;
+    if (!sessionId) return;
+
+    const key = 'verification_code:' + sessionId;
+    const data = await new Promise(resolve => {
+      chrome.storage.local.get([key], resolve);
+    });
+
+    const cached = data?.[key];
+    if (!cached?.code) return;
+
+    // 状态检查：流程已结束的会话不应该再"恢复"
+    const state = stateMachine?.getState();
+    const finishedStates = [
+      RegistrationStateMachine.STATES.ERROR,
+      RegistrationStateMachine.STATES.IDLE,
+      RegistrationStateMachine.STATES.COMPLETED
+    ];
+    if (finishedStates.includes(state)) {
+      log(`🗑️ 清理上一轮残留验证码缓存（state=${state}, code=${cached.code}）`, 'warning');
+      chrome.storage.local.remove([key]);
+      return;
+    }
+
+    log(`💾 从后台缓存恢复验证码: ${cached.code}`);
+    await handleVerificationCodeReceived(cached.code, {
+      sourceTag: '后台缓存',
+      updateCloud: !!currentAccount && !isTempMailProvider(emailConfig),
+      email: cached.email
+    });
+
+    // 决策理由：消费一次即清理，避免下次打开 popup 时重复触发
+    chrome.storage.local.remove([key]);
+  } catch (error) {
+    logger.error('[Popup] 拾取后台验证码失败:', error);
+  }
+}
 
 // 决策理由：popup 关闭时显式清理定时器与心跳，避免资源泄漏（pagehide 比 beforeunload 更可靠）
 window.addEventListener('pagehide', () => {
@@ -99,15 +212,11 @@ window.addEventListener('pagehide', () => {
   }
 });
 
-// 初始化 Supabase
-async function initSupabase() {
+async function initRuntimeClients() {
   try {
-    // 决策理由：使用API而非直接Supabase访问，提高安全性
-    // supabaseClient = new SupabaseClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
     log('✅ API客户端就绪');
-    
-    // 初始化 IndexedDB
     await dbManager.init();
+    registrationVerifier = new RegistrationResultVerifier(apiClient, dbManager, tempMailClient);
     log('✅ IndexedDB 本地缓存就绪');
   } catch (error) {
     log('❌ 初始化失败: ' + error.message, 'error');
@@ -164,10 +273,8 @@ function initStateMachine() {
   });
   
   // 初始化智能验证器
-  smartValidator = new SmartValidator(null);
-  
-  // 初始化超级智能大脑
-  superBrain = new SuperBrain(null, stateMachine, smartValidator);
+  smartValidator = new SmartValidator(apiClient, tempMailClient, dbManager);
+  superBrain = new SuperBrain(apiClient, stateMachine, smartValidator);
   
   log('✅ 状态机已初始化');
   log('✅ 智能验证器已初始化');
@@ -288,10 +395,13 @@ async function startRegistration() {
       currentAccount = null;
     } else if (smartCheck.result.action === 'continue') {
       log('✅ ' + smartCheck.result.message);
-      // 显示验证码（如果有）
       if (smartCheck.result.verificationCode) {
-        displayVerificationCode(smartCheck.result.verificationCode);
-        return; // 直接显示验证码，无需继续
+        await handleVerificationCodeReceived(smartCheck.result.verificationCode, {
+          sourceTag: '恢复校验',
+          updateCloud: !!currentAccount && !isTempMailProvider(emailConfig),
+          email: currentAccount?.email || null
+        });
+        return;
       }
     } else if (smartCheck.result.action === 'retry') {
       log('⚠️ ' + smartCheck.result.message, 'warning');
@@ -327,7 +437,7 @@ async function startRegistration() {
   
   // 获取当前标签页
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  
+
   if (!tab || !tab.url || !isWindsurfRegistrationPage(tab.url)) {
     log('❌ 请先打开 Windsurf 注册页面', 'error');
     stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
@@ -335,40 +445,39 @@ async function startRegistration() {
     });
     await stateMachine.saveToStorage();
     resetUI();
-    
+
     // 自动打开注册页面
-    chrome.tabs.create({ url: 'https://windsurf.com/account/register' });
+    chrome.tabs.create({ url: upstreamContract.registerUrl });
     return;
   }
+
+  // 决策理由：记录注册标签页 id，验证码到手后定向自动填充
+  registrationTabId = tab.id;
   
   // 决策理由：继续模式直接填充，新建模式通过background生成账号
   if (isContinue) {
     // 继续模式：直接使用现有账号通知content script填充
     log('📝 使用现有账号继续填充表单');
-    
-    chrome.tabs.sendMessage(tab.id, {
-      action: 'fillForm',
-      data: currentAccount
-    }, async (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('[Popup] Runtime错误:', chrome.runtime.lastError);
-        stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
-          error: 'Content script通信失败: ' + chrome.runtime.lastError.message
-        });
-        await stateMachine.saveToStorage();
-        log('❌ 通信失败: ' + chrome.runtime.lastError.message, 'error');
-        resetUI();
-        return;
+
+    // 决策理由（关键）：在 fillForm 之前先启动 SW 后台轮询，
+    // 这样即使 popup 在填表单期间被销毁也不会丢失监听。
+    if (currentAccount.email) {
+      if (isTempMailProvider(emailConfig)) {
+        await startTempMailMonitoring(currentAccount.email);
+      } else {
+        await startRealtimeMonitoring(currentAccount.email);
       }
-      
+    }
+
+    try {
+      const response = await sendFillFormWithFallback(tab.id, currentAccount);
       if (response && response.success) {
-        log('✅ 表单已填充');
+        log('✅ 表单已填充（验证码后台监听已就绪）');
         displayAccountInfo(currentAccount);
-        
+
         // 决策理由：根据当前状态合法转换到WAITING_VERIFICATION
         const currentState = stateMachine.getState();
         if (currentState !== RegistrationStateMachine.STATES.WAITING_VERIFICATION) {
-          // 根据当前状态选择合法的转换路径
           if (currentState === RegistrationStateMachine.STATES.PREPARING) {
             stateMachine.transition(RegistrationStateMachine.STATES.DETECTING_PAGE);
             await stateMachine.saveToStorage();
@@ -378,8 +487,7 @@ async function startRegistration() {
             stateMachine.transition(RegistrationStateMachine.STATES.FILLING_STEP1);
             await stateMachine.saveToStorage();
           }
-          
-          // 从任何FILLING状态都可以跳到WAITING_VERIFICATION
+
           if ([RegistrationStateMachine.STATES.FILLING_STEP1,
                RegistrationStateMachine.STATES.WAITING_STEP1_SUBMIT,
                RegistrationStateMachine.STATES.FILLING_STEP2,
@@ -390,31 +498,30 @@ async function startRegistration() {
             await stateMachine.saveToStorage();
           }
         }
-        
-        // 决策理由：无论当前状态如何，只要未监听就启动监听
-        if (!isMonitoring && currentAccount.email) {
-          startRealtimeMonitoring(currentAccount.email);
-        }
-        
-        // 确保显示停止按钮
+
         document.getElementById('start-btn').classList.add('hidden');
         document.getElementById('stop-btn').classList.remove('hidden');
-      } else {
-        stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
-          error: response?.error || '填充失败'
-        });
-        await stateMachine.saveToStorage();
-        log('❌ 填充失败: ' + (response?.error || '未知错误'), 'error');
-        resetUI();
       }
-    });
+    } catch (fillError) {
+      stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
+        error: fillError.message
+      });
+      await stateMachine.saveToStorage();
+      log('❌ 填充失败: ' + fillError.message, 'error');
+      if (/Receiving end does not exist|F5/i.test(fillError.message)) {
+        log('💡 提示：按 F5 刷新 windsurf 页面，再重新点击"开始注册"', 'warning');
+      }
+      if (currentAccount?.session_id) {
+        try { await chrome.runtime.sendMessage({ action: 'stopCodePolling', sessionId: currentAccount.session_id }); } catch { /* ignore */ }
+      }
+      resetUI();
+    }
   } else {
     // 新建模式：根据配置选择账号生成方式
     stateMachine.transition(RegistrationStateMachine.STATES.DETECTING_PAGE);
     await stateMachine.saveToStorage();
     
-    // 检查是否使用临时邮箱模式
-    if (emailConfig && emailConfig.mode === 'temp-mail' && tempMailClient) {
+    if (emailConfig && isTempMailProvider(emailConfig) && tempMailClient) {
       // 临时邮箱模式：前端直接生成
       log('🌍 使用临时邮箱模式生成账号...');
       
@@ -431,7 +538,8 @@ async function startRegistration() {
           session_id: 'session_' + Date.now() + '_' + generateRandomString(6),
           tempMailToken: emailResult.token,
           created_at: new Date().toISOString(),
-          status: 'pending'
+          status: 'pending',
+          provider: getEmailProviderName(emailConfig)
         };
         
         // 3. 保存当前账号
@@ -456,44 +564,38 @@ async function startRegistration() {
         } catch (err) {
           console.error('保存账号失败:', err);
         }
-        
-        // 7. 通知content script填充表单
-        chrome.tabs.sendMessage(tab.id, {
-          action: 'fillForm',
-          data: accountData
-        }, async (fillResponse) => {
-          if (chrome.runtime.lastError) {
-            const errorMsg = chrome.runtime.lastError.message;
-            
-            // 友好的错误提示
-            if (errorMsg.includes('Receiving end does not exist')) {
-              log('❌ 页面未就绪，请刷新页面后重试', 'error');
-              log('💡 提示: 按 F5 刷新页面，然后重新点击"开始注册"', 'warning');
-            } else {
-              log('❌ 填充失败: ' + errorMsg, 'error');
-            }
-            
-            resetUI();
-            return;
-          }
-          
+
+        // 决策理由（关键）：在 sendMessage(fillForm) 之前就启动后台轮询。
+        // 填表单 + 等提交 + 等验证码页面渲染共耗时 15-30s，期间 popup 必然被销毁，
+        // 如果"启动监听"放在 fillForm 回调里，那回调永远不会执行（popup 没了）。
+        // 提前启动让 SW 接手，验证码到手时直接给 tab 发 fillVerificationCode。
+        await startTempMailMonitoring(accountData.email);
+
+        // 7. 通知content script填充表单（含 content-script 缺失自动注入回退）
+        try {
+          const fillResponse = await sendFillFormWithFallback(tab.id, accountData);
           if (fillResponse && fillResponse.success) {
-            log('✅ 表单已填充');
-            log('🔄 启动临时邮箱验证码监听...');
-            
-            // 转换到等待验证状态
+            log('✅ 表单已填充（验证码后台监听已就绪）');
             stateMachine.transition(RegistrationStateMachine.STATES.WAITING_VERIFICATION, {
               email: accountData.email
             });
             await stateMachine.saveToStorage();
-            
-            // 启动临时邮箱验证码自动获取
-            startTempMailMonitoring(accountData.email);
           }
-        });
-        
+        } catch (fillError) {
+          log('❌ 填充失败: ' + fillError.message, 'error');
+          if (/Receiving end does not exist|F5/i.test(fillError.message)) {
+            log('💡 提示：按 F5 刷新 windsurf 页面，再重新点击"开始注册"', 'warning');
+          }
+          // 决策理由：fillForm 失败时停止已启动的轮询，避免空跑 5 分钟
+          try {
+            await chrome.runtime.sendMessage({ action: 'stopCodePolling', sessionId: accountData.session_id });
+          } catch { /* ignore */ }
+          resetUI();
+          return;
+        }
+
         return; // 退出函数，不执行后面的background调用
-        
+
       } catch (error) {
         log('❌ 临时邮箱生成失败: ' + error.message, 'error');
         resetUI();
@@ -569,7 +671,12 @@ async function startRegistration() {
         error: response?.error || '未知错误'
       });
       await stateMachine.saveToStorage();
-      log('❌ 启动失败: ' + (response?.error || '未知错误'), 'error');
+      const errMsg = response?.error || '未知错误';
+      log('❌ 启动失败: ' + errMsg, 'error');
+      // 决策理由：把"通信失败"翻译成用户可操作的提示
+      if (/Receiving end does not exist|F5|content-script/i.test(errMsg)) {
+        log('💡 提示：windsurf 标签页里没有插件 content-script，请按 F5 刷新页面后重试', 'warning');
+      }
       resetUI();
     }
     });
@@ -585,25 +692,20 @@ async function startRegistration() {
   }
 }
 
-/**
- * 云端API触发后端监控
- * 决策理由：直接调用云端API服务器，无需本地配置
- */
 async function triggerBackendMonitor(email, sessionId) {
   console.log('[triggerBackendMonitor] 开始', { email, sessionId });
   console.log('[triggerBackendMonitor] apiClient存在:', typeof apiClient !== 'undefined');
   console.log('[triggerBackendMonitor] API_CONFIG:', API_CONFIG);
   
-  log('☁️ 正在连接云端服务...');
+  log('☁️ 正在连接后端服务...');
   
   try {
-    // 调用云端API启动监控
     console.log('[triggerBackendMonitor] 调用apiClient.startMonitor');
     const result = await apiClient.startMonitor(email, sessionId);
     console.log('[triggerBackendMonitor] API响应:', result);
     
     if (result.success) {
-      log('✅ 云端监控已启动');
+      log('✅ 后端监控已启动');
       console.log('[triggerBackendMonitor] 成功');
       return true;
     } else {
@@ -614,67 +716,86 @@ async function triggerBackendMonitor(email, sessionId) {
   } catch (error) {
     console.error('[triggerBackendMonitor] 异常:', error);
     console.error('[triggerBackendMonitor] 错误详情:', error.message, error.stack);
-    log('❌ 连接云端服务失败: ' + error.message, 'error');
+    log('❌ 连接后端服务失败: ' + error.message, 'error');
     log('💡 提示: 请确保API服务器正在运行', 'warning');
     return false;
   }
 }
 
 /**
- * 启动临时邮箱验证码监听
+ * 启动临时邮箱验证码监听（temp-mail 模式）
+ *
+ * 决策理由：MV3 popup 失去焦点即销毁，popup 内的轮询会丢。
+ * 改为委托 service-worker 后台轮询，验证码到手时：
+ *   - SW 直接对注册标签页发 fillVerificationCode（OTP 自动填）
+ *   - SW 同时发 codeReceived runtime 消息（popup 还开着时即时更新）
+ *   - SW 写 storage（popup 重开时也能拾取）
  */
 async function startTempMailMonitoring(email) {
-  if (isMonitoring) {
-    log('⚠️ 已在监听验证码，请勿重复操作');
+  if (!currentAccount?.tempMailToken) {
+    log('❌ 缺少临时邮箱令牌，无法启动监听', 'error');
     return;
   }
-
-  if (!tempMailClient) {
-    log('❌ 临时邮箱客户端未初始化', 'error');
-    return;
-  }
-
-  isMonitoring = true;
-  log('📧 开始监听临时邮箱: ' + email);
-  log('⏳ 预计等待时间: 5分钟（最多60次检查，每5秒一次）');
-
-  try {
-    // 使用 tempMailClient 自动获取验证码（内部已实现轮询）
-    const result = await tempMailClient.waitForVerificationCode();
-
-    if (result.success && result.code) {
-      // 复用统一成功处理：状态/统计/账号持久化
-      await handleVerificationCodeReceived(result.code, { sourceTag: '临时邮箱' });
-      stopRealtimeMonitoring();
-    } else {
-      log('⏱️ 验证码获取超时: ' + (result.error || '未知错误'), 'error');
-      log('💡 提示: 您可以手动访问临时邮箱网站查看', 'warning');
-      log('📧 邮箱地址: ' + email, 'warning');
-
-      stopRealtimeMonitoring();
-      // 复用统一超时处理：决定重试 vs ERROR
-      handleVerificationTimeout(() => startTempMailMonitoring(email), '验证码获取超时');
-    }
-  } catch (error) {
-    log('❌ 验证码监听失败: ' + error.message, 'error');
-    stopRealtimeMonitoring();
-  }
+  await delegateBackgroundCodePolling({
+    email,
+    mode: 'temp-mail',
+    tempMailToken: currentAccount.tempMailToken,
+    tempMailProvider: currentAccount?.tempMailProvider || emailConfig?.tempMail?.provider || '1secmail',
+    pollIntervalMs: emailConfig?.tempMail?.pollInterval || 5000,
+    maxAttempts: emailConfig?.tempMail?.maxAttempts || 60,
+    sourceTag: '临时邮箱'
+  });
 }
 
-// 使用 Supabase Realtime 监听验证码（API模式）
-function startRealtimeMonitoring(email) {
+/**
+ * 启动后端 API 验证码监听（qq-imap 模式）
+ *
+ * 决策理由：同上——委托 SW 后台轮询，规避 popup 关闭导致的轮询中断。
+ */
+async function startRealtimeMonitoring(email) {
+  await delegateBackgroundCodePolling({
+    email,
+    mode: 'qq-imap',
+    pollIntervalMs: API_CONFIG.POLL_INTERVAL || 5000,
+    maxAttempts: 60,
+    sourceTag: '后端轮询'
+  });
+}
+
+/**
+ * 把验证码轮询委托给 service-worker
+ * 决策理由：把"popup 内 setInterval"换成"SW 内 setTimeout 链"，
+ *           即使 popup 关掉也继续工作。
+ */
+async function delegateBackgroundCodePolling(opts) {
   if (isMonitoring) {
     log('⚠️ 已在监听验证码，请勿重复操作');
     return;
   }
-  
-  // API客户端始终可用，无需检查
-  isMonitoring = true;
-  monitorDeadlineTs = Date.now() + 120000;
-  if (monitorCountdownHandle) {
-    clearInterval(monitorCountdownHandle);
-    monitorCountdownHandle = null;
+
+  // 取 sessionId
+  let sessionId = null;
+  try {
+    if (stateMachine && typeof stateMachine.getMetadata === 'function') {
+      const md = stateMachine.getMetadata();
+      sessionId = md?.session_id || null;
+    }
+  } catch { /* ignore */ }
+  if (!sessionId && currentAccount?.session_id) {
+    sessionId = currentAccount.session_id;
   }
+
+  if (!sessionId) {
+    log('❌ 缺少 session_id，无法启动验证码监听', 'error');
+    return;
+  }
+
+  isMonitoring = true;
+
+  // 启动 popup 端的倒计时显示（仅 UI，不参与轮询）
+  const totalMs = (opts.pollIntervalMs || 5000) * (opts.maxAttempts || 60);
+  monitorDeadlineTs = Date.now() + totalMs;
+  if (monitorCountdownHandle) clearInterval(monitorCountdownHandle);
   monitorCountdownHandle = setInterval(() => {
     const remain = Math.max(0, Math.floor((monitorDeadlineTs - Date.now()) / 1000));
     updateStatus('running', `等待验证码（剩余 ${remain}s）`);
@@ -683,66 +804,155 @@ function startRealtimeMonitoring(email) {
       monitorCountdownHandle = null;
     }
   }, 1000);
-  
-  // 获取当前会话ID（优先状态机元数据，其次 currentAccount）
-  let sessionId = null;
-  try {
-    if (stateMachine && typeof stateMachine.getMetadata === 'function') {
-      const md = stateMachine.getMetadata();
-      sessionId = md && md.session_id ? md.session_id : null;
-    }
-  } catch {}
-  if (!sessionId && currentAccount && currentAccount.session_id) {
-    sessionId = currentAccount.session_id;
-  }
 
-  // 决策理由：先触发后端监控（异步），再启动前端监听
-  triggerBackendMonitor(email, sessionId).catch(err => {
-    console.error('[触发后端] 错误:', err);
-  });
-  
-  log('🔔 启动验证码轮询监听...');
-  
-  // 使用轮询API检查验证码（替代直接Supabase访问）
-  let pollingInterval;
-  const pollVerificationCode = async () => {
-    if (!isMonitoring) {
-      clearInterval(pollingInterval);
+  log(`🔔 委托后台轮询验证码（${opts.sourceTag}，${(totalMs / 1000) | 0}s 内）`);
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'startCodePolling',
+      sessionId,
+      email: opts.email,
+      mode: opts.mode,
+      tabId: registrationTabId,
+      tempMailToken: opts.tempMailToken,
+      tempMailProvider: opts.tempMailProvider,
+      pollIntervalMs: opts.pollIntervalMs,
+      maxAttempts: opts.maxAttempts
+    });
+
+    if (!response?.success) {
+      log('❌ 启动后台轮询失败: ' + (response?.error || '未知错误'), 'error');
+      isMonitoring = false;
+      if (monitorCountdownHandle) {
+        clearInterval(monitorCountdownHandle);
+        monitorCountdownHandle = null;
+      }
       return;
     }
-    
-    try {
-      const response = await apiClient.checkCode(sessionId);
 
-      if (response.success && response.code) {
-        logger.info('[轮询] 收到验证码:', response.code);
-        // 复用统一成功处理（API 模式需要同步云端状态）
-        await handleVerificationCodeReceived(response.code, {
-          sourceTag: '轮询',
-          updateCloud: true,
-          email
-        });
-        stopRealtimeMonitoring();
+    log('✅ 后台轮询已启动，可以放心切换标签页');
+
+    // realtimeChannel 用作"取消句柄"——stopRealtimeMonitoring 会调用
+    realtimeChannel = {
+      sessionId,
+      sourceTag: opts.sourceTag,
+      mode: opts.mode,
+      email: opts.email,
+      unsubscribe: () => {
+        chrome.runtime.sendMessage({ action: 'stopCodePolling', sessionId }).catch(() => {});
       }
+    };
+  } catch (error) {
+    log('❌ 启动后台轮询异常: ' + error.message, 'error');
+    isMonitoring = false;
+    if (monitorCountdownHandle) {
+      clearInterval(monitorCountdownHandle);
+      monitorCountdownHandle = null;
+    }
+  }
+}
+
+/**
+ * 给注册标签页发 fillForm，content-script 没就绪时尝试主动注入后重试一次。
+ *
+ * 决策理由（与 background 同源）：
+ *   reload 扩展或重启浏览器后，已经打开的 windsurf 标签页里没有最新 content-script——
+ *   chrome 不会自动给已存在 tab 注入。利用 manifest "scripting" 权限主动补注入，
+ *   绝大多数情况下就能直接救活，免去手动 F5。
+ */
+async function sendFillFormWithFallback(tabId, data) {
+  const sendOnce = () => new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action: 'fillForm', data }, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        const e = new Error(err.message);
+        e.isCommError = true;
+        reject(e);
+        return;
+      }
+      if (response && response.success) {
+        resolve(response);
+      } else {
+        reject(new Error(response?.error || '表单填充失败'));
+      }
+    });
+  });
+
+  try {
+    return await sendOnce();
+  } catch (error) {
+    if (!error.isCommError || !/Receiving end does not exist/i.test(error.message)) {
+      throw error;
+    }
+    log('⚙️ content-script 未就绪，尝试主动注入...', 'warning');
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['protocol-contract.js', 'utils/logger.js', 'content/content-script.js']
+      });
+      log('✅ content-script 已注入，重试填充', 'success');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      return await sendOnce();
+    } catch (injectError) {
+      throw new Error(
+        '页面 content-script 缺失且无法主动注入。请按 F5 刷新 windsurf 页面后重试。原始错误：' + error.message
+      );
+    }
+  }
+}
+
+/**
+ * 把验证码自动填到注册页面的输入框（OTP 6 段或单输入框均兼容）。
+ * 决策理由：避免用户手动复制+粘贴，减少操作步骤。
+ * 优先发到 registrationTabId（注册流程开始时记录），fallback 到当前活跃 tab。
+ *
+ * @param {string} code
+ * @param {Object} options - { autoSubmit?: boolean }
+ * @returns {Promise<{ ok: boolean, mode?: string, submitted?: boolean, reason?: string }>}
+ */
+async function autofillVerificationCodeOnPage(code, options = {}) {
+  let tabId = registrationTabId;
+  if (!tabId) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tab?.id;
     } catch (error) {
-      logger.error('[轮询] 检查验证码失败:', error);
+      logger.warn('[AutoFill] 查询活跃标签页失败:', error);
     }
-  };
-  
-  // 立即检查一次，然后每5秒轮询一次
-  pollVerificationCode();
-  pollingInterval = setInterval(pollVerificationCode, API_CONFIG.POLL_INTERVAL);
-  realtimeChannel = { unsubscribe: () => clearInterval(pollingInterval) };
-  
-  log('✅ 验证码轮询已启动（每5秒检查一次）');
-  
-  // 设置120秒超时（复用统一超时处理）
-  setTimeout(() => {
-    if (isMonitoring) {
-      stopRealtimeMonitoring();
-      handleVerificationTimeout(() => startRealtimeMonitoring(email), '验证码监听超时');
+  }
+
+  if (!tabId) {
+    return { ok: false, reason: '找不到注册标签页' };
+  }
+
+  return new Promise(resolve => {
+    try {
+      chrome.tabs.sendMessage(
+        tabId,
+        { action: 'fillVerificationCode', code, options },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            logger.warn('[AutoFill] 发送失败:', chrome.runtime.lastError.message);
+            resolve({ ok: false, reason: chrome.runtime.lastError.message });
+            return;
+          }
+          if (!response || response.success === false) {
+            resolve({ ok: false, reason: response?.reason || '内容脚本未返回成功' });
+            return;
+          }
+          resolve({
+            ok: true,
+            mode: response.mode,
+            filledCount: response.filledCount,
+            submitted: !!response.submitted
+          });
+        }
+      );
+    } catch (error) {
+      logger.error('[AutoFill] 异常:', error);
+      resolve({ ok: false, reason: error.message });
     }
-  }, 120000);
+  });
 }
 
 /**
@@ -757,6 +967,21 @@ async function handleVerificationCodeReceived(code, options = {}) {
   log(`🎉 收到验证码: ${code}`, 'success');
   displayVerificationCode(code);
 
+  // 决策理由：拿到验证码立刻投递到注册页面自动填充。
+  // 与下面的独立核验并行执行，让用户少一次手动复制/粘贴。
+  // 自动提交按钮的等待逻辑（最多 1.5s）在 content-script 内完成，
+  // 这里 await 主要是为了把"是否成功填充"反馈给用户日志。
+  autofillVerificationCodeOnPage(code).then(fillResult => {
+    if (fillResult.ok) {
+      const submittedHint = fillResult.submitted ? '，已点击提交' : '，等待手动提交';
+      log(`✍️ 已自动填写验证码（${fillResult.mode}${submittedHint}）`, 'success');
+    } else {
+      log(`💡 自动填写未生效（${fillResult.reason}），请手动复制验证码`, 'warning');
+    }
+  }).catch(error => {
+    logger.error('[AutoFill] 投递异常:', error);
+  });
+
   // 统计：记录步骤完成
   try {
     await analytics.recordStepEnd('waiting_verification', true);
@@ -764,8 +989,7 @@ async function handleVerificationCodeReceived(code, options = {}) {
     logger.error('[Analytics] 记录步骤失败:', error);
   }
 
-  // 状态机转换到完成
-  stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
+  stateMachine.transition(RegistrationStateMachine.STATES.VERIFYING_RESULT, {
     verificationCode: code
   });
   try {
@@ -774,26 +998,75 @@ async function handleVerificationCodeReceived(code, options = {}) {
     logger.error(`[${sourceTag}] 保存状态失败:`, error);
   }
 
-  // 持久化账号状态
   if (currentAccount) {
-    currentAccount.status = 'verified';
     currentAccount.verification_code = code;
     try {
       await dbManager.saveAccount(currentAccount);
-      log('✅ 账号状态已更新');
+      log('✅ 已记录验证码，开始独立核验');
     } catch (e) {
       logger.error('[DB] 保存账号失败:', e);
     }
   }
 
-  // 仅 API 模式需要把状态同步回云端
-  if (updateCloud && email) {
+  const verificationReport = registrationVerifier
+    ? await registrationVerifier.verify(currentAccount, { expectedCode: code })
+    : { confirmed: false, degraded: false, reason: '核验器未初始化', attempts: [] };
+
+  // 决策理由：把"是否独立确认"与"是否降级确认"分开告诉用户。
+  // - confirmed && !degraded ：强确认，直接进入 COMPLETED
+  // - confirmed && degraded  ：降级确认（独立来源全部不可用，本地数据自洽），
+  //                            状态机也走 COMPLETED，但日志/metadata 里记一笔 degraded
+  // - !confirmed             ：核验失败，进入 ERROR
+  if (!verificationReport.confirmed) {
+    stateMachine.transition(RegistrationStateMachine.STATES.ERROR, {
+      error: verificationReport.reason || '独立核验失败',
+      verificationReport
+    });
+    await stateMachine.saveToStorage();
+    log('❌ 独立核验失败: ' + (verificationReport.reason || '未知错误'), 'error');
+    return;
+  }
+
+  if (verificationReport.degraded) {
+    log(`⚠️ 独立来源不可用，已使用本地降级核验（来源: ${verificationReport.source}）`, 'warning');
+  } else {
+    log(`🔎 独立核验通过: ${verificationReport.source}`, 'success');
+  }
+
+  if (currentAccount) {
+    currentAccount.status = 'verified';
+    currentAccount.verified_at = new Date().toISOString();
+    currentAccount.verification_source = verificationReport.source || sourceTag;
+    currentAccount.verification_degraded = !!verificationReport.degraded;
+    try {
+      await dbManager.saveAccount(currentAccount);
+      log('✅ 本地账号状态已确认');
+    } catch (error) {
+      logger.error(`[${sourceTag}] 本地确认保存失败:`, error);
+    }
+  }
+
+  if (updateCloud && email && isTempMailProvider(emailConfig)) {
     try {
       await updateAccountStatus(email, 'verified', code);
-      log('✅ 账号状态已同步到云端');
+      log('✅ 后端账号状态已同步');
     } catch (error) {
       logger.error(`[${sourceTag}] 更新账号状态失败:`, error);
     }
+  }
+
+  stateMachine.transition(RegistrationStateMachine.STATES.COMPLETED, {
+    verificationCode: code,
+    verificationConfirmed: verificationReport.confirmed,
+    verificationDegraded: !!verificationReport.degraded,
+    verificationSource: verificationReport.source || sourceTag,
+    verificationAttempts: Array.isArray(verificationReport.attempts) ? verificationReport.attempts.length : 0
+  });
+
+  try {
+    await stateMachine.saveToStorage();
+  } catch (error) {
+    logger.error(`[${sourceTag}] 保存完成状态失败:`, error);
   }
 }
 
@@ -1096,8 +1369,7 @@ function updateButtonState(mode) {
 }
 
 /**
- * 更新账号状态到Supabase
- * 决策理由：O(1)复杂度的单次HTTP请求，性能可接受
+ * 更新账号状态到后端
  */
 async function updateAccountStatus(email, status, verificationCode = null) {
   const updateData = {
@@ -1111,27 +1383,19 @@ async function updateAccountStatus(email, status, verificationCode = null) {
   }
   
   try {
-    // 使用API而不是直接访问Supabase
-    const response = await fetch(
-      `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.UPDATE_ACCOUNT}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email, ...updateData })
-      }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    const response = await apiClient.updateAccount({ email, ...updateData });
+
+    if (!response?.success) {
+      throw new Error(response?.error || '更新账号状态失败');
     }
     
-    // 同步更新IndexedDB
     if (currentAccount && currentAccount.email === email) {
       currentAccount.status = status;
       if (verificationCode) {
         currentAccount.verification_code = verificationCode;
+      }
+      if (status === 'verified') {
+        currentAccount.verified_at = new Date().toISOString();
       }
       await dbManager.saveAccount(currentAccount);
     }
@@ -1190,7 +1454,7 @@ async function openSuperBrain() {
       <div style="padding: 60px 40px; text-align: center;">
         <div style="font-size: 48px; animation: brainPulse 1s ease-in-out infinite;">🧠</div>
         <div style="margin-top: 20px; color: white; font-size: 16px;">正在执行全面诊断...</div>
-        <div style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 12px;">检测前端、后端、Supabase、Native Messaging</div>
+        <div style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 12px;">检测前端、后端、关键链路与上游探测</div>
       </div>
     </div>
   `;
@@ -1214,4 +1478,3 @@ function viewStats() {
     height: 650
   });
 }
-
