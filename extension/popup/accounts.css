@@ -1,13 +1,18 @@
 /* 账号管理页面样式 */
 
+/* 决策理由：styles-modern.css 给 body 设置了 min-width/max-width: 400px，
+   这里必须同时覆盖三者，否则 width:600px 会被 max-width:400px 限制为 400px，
+   导致工具栏挤压、按钮文字被截断（导... 清... 查...）。 */
 body {
-  width: 600px;
+  width: 480px;
+  min-width: 480px;
+  max-width: 480px;
   min-height: 500px;
   max-height: 600px;
 }
 
 .container {
-  padding: 15px;
+  padding: 14px 16px;
 }
 
 /* 头部 */
@@ -38,27 +43,47 @@ body {
   border: 1px solid rgba(229, 231, 235, 0.8);
 }
 
-.btn-icon:hover {
+.btn-icon:hover:not(:disabled):not(.is-loading) {
   background: rgba(229, 231, 235, 0.9);
   transform: scale(1.1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.btn-icon:disabled,
+.btn-icon[disabled] {
+  cursor: not-allowed;
+  opacity: 0.7;
+  box-shadow: none;
+}
+
+/* 决策理由：刷新按钮在加载态时让图标旋转，给用户明确的“正在刷新”反馈 */
+.btn-icon.is-loading {
+  animation: btn-icon-spin 0.9s linear infinite;
+}
+
+@keyframes btn-icon-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 工具栏 */
 .toolbar {
   display: flex;
   gap: 8px;
-  margin-bottom: 15px;
+  margin-bottom: 14px;
+  align-items: center;
 }
 
 .search-input {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid rgba(229, 231, 235, 0.8);
   border-radius: 6px;
   background: #ffffff;
   color: #111827;
   font-size: 13px;
+  height: 36px;
+  box-sizing: border-box;
 }
 
 .search-input::placeholder {
@@ -71,21 +96,55 @@ body {
   box-shadow: 0 0 0 2px rgba(107, 114, 128, 0.1);
 }
 
+/* 决策理由：.btn 默认 flex:1 + overflow:hidden 会让 min-width:auto 解析为 0，
+   导致按钮被挤到只剩一两个字符。这里在工具栏上下文里把按钮改为内容尺寸，
+   不参与抢占空间，避免文字截断。 */
+.toolbar .btn {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  height: 36px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  letter-spacing: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.toolbar .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
 /* 统计信息 */
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-bottom: 15px;
+  gap: 10px;
+  margin-bottom: 14px;
   padding: 12px;
   background: rgba(243, 244, 246, 0.6);
   border-radius: 8px;
   border: 1px solid rgba(229, 231, 235, 0.8);
 }
 
-.stat-item {
+/* 决策理由：与 styles-modern.css 中通用 .stat-item 区分，避免 hover 抖动 */
+.stats .stat-item {
   flex: 1;
   text-align: center;
+  background: transparent;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.stats .stat-item:hover {
+  background: transparent;
+  transform: none;
+  box-shadow: none;
 }
 
 .stat-label {
@@ -97,18 +156,21 @@ body {
   letter-spacing: 0.5px;
 }
 
-.stat-value {
+.stats .stat-value {
   display: block;
   font-size: 20px;
-  font-weight: bold;
+  font-weight: 700;
   color: #059669;
+  margin-bottom: 0;
 }
 
 /* 账号列表 */
 .accounts-list {
-  max-height: 350px;
+  max-height: 360px;
   overflow-y: auto;
-  padding-right: 5px;
+  padding-right: 4px;
+  /* 决策理由：避免滚动时跳动，预留滚动条占位 */
+  scrollbar-gutter: stable;
 }
 
 .account-card {
@@ -176,53 +238,156 @@ body {
   font-weight: 600;
 }
 
+/* 决策理由：5 个动作按钮（复制邮箱/复制密码/查询验证码/查看邮箱/删除）
+   在 480px 宽度下单行放不开。改用换行 flex 布局，每个按钮以 1/3 宽为基线，
+   首行 3 个、次行 2 个自动撑满，且永远完整显示文字。 */
 .account-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid rgba(229, 231, 235, 0.8);
 }
 
+.account-actions > .btn-small {
+  flex: 1 1 calc(33.333% - 4px);
+  min-width: 88px;
+}
+
 .btn-small {
-  padding: 4px 8px;
-  font-size: 11px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.2;
   border: 1px solid rgba(229, 231, 235, 0.8);
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s, color 0.15s;
   background: rgba(243, 244, 246, 0.9);
   color: #374151;
   font-weight: 600;
+  white-space: nowrap;
+  text-align: center;
+  user-select: none;
 }
 
-.btn-small:hover {
-  background: rgba(229, 231, 235, 0.9);
+.btn-small:hover:not(:disabled):not(.is-loading) {
+  background: #ffffff;
   color: #111827;
-  transform: scale(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+}
+
+.btn-small:active:not(:disabled):not(.is-loading) {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
 }
 
 .btn-small:disabled,
 .btn-small[disabled] {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
   filter: grayscale(10%);
+}
+
+.btn-small.is-loading {
+  opacity: 0.85;
+  cursor: progress;
+  position: relative;
+}
+
+/* 动作按钮变体 */
+.btn-small.btn-success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  border-color: rgba(5, 150, 105, 0.4);
+}
+
+.btn-small.btn-success:hover:not(:disabled):not(.is-loading) {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: #ffffff;
+}
+
+.btn-small.btn-info {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  border-color: rgba(79, 70, 229, 0.4);
+}
+
+.btn-small.btn-info:hover:not(:disabled):not(.is-loading) {
+  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+  color: #ffffff;
+}
+
+.btn-small.btn-danger {
+  background: rgba(254, 242, 242, 0.9);
+  color: #b91c1c;
+  border-color: rgba(252, 165, 165, 0.6);
+}
+
+.btn-small.btn-danger:hover:not(:disabled):not(.is-loading) {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: #ffffff;
+  border-color: #dc2626;
+}
+
+/* 复制成功的瞬态反馈：按钮临时变绿打勾 */
+.btn-small.is-success {
+  background: #d1fae5;
+  color: #065f46;
+  border-color: #a7f3d0;
+}
+
+/* 验证码字段：高亮可点击复制 */
+.code-display {
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.code-display.has-code {
+  color: #10b981;
+}
+
+.code-display.has-code:hover {
+  color: #059669;
+  text-decoration: underline;
+}
+
+.code-display.is-querying {
+  color: #3b82f6;
+}
+
+.code-display.is-warn {
+  color: #f59e0b;
+}
+
+.code-display.is-error {
+  color: #ef4444;
 }
 
 /* 空状态 */
 .empty-state {
   text-align: center;
-  padding: 60px 20px;
+  padding: 50px 20px;
 }
 
 .empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
+  font-size: 56px;
+  margin-bottom: 14px;
+  opacity: 0.85;
 }
 
 .empty-state p {
   color: #6b7280;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+  font-size: 13px;
+}
+
+.empty-state .btn {
+  display: inline-block;
+  padding: 10px 20px;
+  font-size: 14px;
 }
 
 /* 加载状态 */

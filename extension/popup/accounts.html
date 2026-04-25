@@ -16,15 +16,17 @@
     </div>
     
     <div class="toolbar">
-      <input 
-        type="text" 
-        id="search-input" 
-        class="search-input" 
+      <input
+        type="text"
+        id="search-input"
+        class="search-input"
         placeholder="搜索邮箱或用户名..."
+        aria-label="搜索账号"
+        autocomplete="off"
+        spellcheck="false"
       >
-      <button id="export-btn" class="btn btn-secondary">导出CSV</button>
-      <button id="clear-btn" class="btn btn-danger">清空本地</button>
-      <button id="view-mailbox-btn" class="btn btn-primary">查看邮箱</button>
+      <button id="export-btn" class="btn btn-secondary" title="导出当前账号为 CSV 文件">导出CSV</button>
+      <button id="clear-btn" class="btn btn-danger" title="清空本地全部账号（不可恢复）">清空本地</button>
     </div>
     
     <div class="stats">
@@ -52,8 +54,8 @@
       <button id="start-register-btn" class="btn btn-primary">开始注册</button>
     </div>
     
-    <div id="loading" class="loading hidden">
-      <div class="spinner"></div>
+    <div id="loading" class="loading hidden" role="status" aria-live="polite">
+      <div class="loading-spinner" aria-hidden="true"></div>
       <p>加载中...</p>
     </div>
     
